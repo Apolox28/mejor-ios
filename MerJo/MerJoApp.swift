@@ -6,7 +6,6 @@ struct MerJoApp: App {
         WindowGroup {
             RootView()
         }
-        .accentColor(Color(red: 1.0, green: 0.31, blue: 0.48))
     }
 }
 
@@ -22,7 +21,6 @@ enum Section: String, CaseIterable, Identifiable {
         case .stories:  return "Historias"
         case .search:   return "Buscar"
         }
-        .accentColor(Color(red: 1.0, green: 0.31, blue: 0.48))
     }
 
     var icon: String {
@@ -31,7 +29,6 @@ enum Section: String, CaseIterable, Identifiable {
         case .stories:  return "circle.dashed"
         case .search:   return "magnifyingglass"
         }
-        .accentColor(Color(red: 1.0, green: 0.31, blue: 0.48))
     }
 
     var startURL: URL {
@@ -40,7 +37,6 @@ enum Section: String, CaseIterable, Identifiable {
         case .stories:  return URL(string: "https://www.instagram.com/")!
         case .search:   return URL(string: "https://www.instagram.com/explore/search/")!
         }
-        .accentColor(Color(red: 1.0, green: 0.31, blue: 0.48))
     }
 }
 
