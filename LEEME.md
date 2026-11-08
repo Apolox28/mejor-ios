@@ -2,13 +2,14 @@
 
 # Mejor: Instagram sin distracciones (iOS 15+)
 
-Esta app tiene solo tres pestañas:
+Esta app tiene solo cuatro pestañas:
 
 | Pestaña | Qué muestra |
 |---|---|
 | **Mensajes** | Tu bandeja de DMs. Los reels que te mandan se ven ahí mismo. |
 | **Historias** | Solo la fila de historias. Las publicaciones del feed quedan ocultas. |
 | **Buscar** | El buscador de cuentas, sin la cuadrícula de Explorar. |
+| **Perfil** | Tu perfil. |
 
 El feed de Reels y Explorar están bloqueados: si llegas a ellos, la app te redirige.
 

@@ -38,7 +38,7 @@ enum SharedWeb {
             + "Version/\(major).\(minor) Mobile/15E148 Safari/604.1"
     }()
 
-    static func makeConfiguration(section: Section?) -> WKWebViewConfiguration {
+    static func makeConfiguration(section: Section?, handler: WKScriptMessageHandler) -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
         config.processPool = processPool
         config.websiteDataStore = dataStore
@@ -59,6 +59,7 @@ enum SharedWeb {
                 source: FocusFilter.loginScript,
                 injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
+        controller.add(WeakScriptHandler(handler), name: "mejor")
         config.userContentController = controller
         return config
     }
@@ -69,6 +70,7 @@ struct WebScreen: View {
     let startURL: URL
     let section: Section?
     let resetToken: Int
+    var loadDelay: TimeInterval = 0
     var onNavigate: ((URL) -> Void)? = nil
 
     @State private var isLoading = true
@@ -77,7 +79,7 @@ struct WebScreen: View {
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
             InstagramWebView(startURL: startURL, section: section, resetToken: resetToken,
-                             isLoading: $isLoading, onNavigate: onNavigate)
+                             loadDelay: loadDelay, isLoading: $isLoading, onNavigate: onNavigate)
                 .opacity(isLoading ? 0 : 1)
             if isLoading {
                 ProgressView().scaleEffect(1.2)
@@ -91,13 +93,14 @@ struct InstagramWebView: UIViewRepresentable {
     let startURL: URL
     let section: Section?
     let resetToken: Int
+    var loadDelay: TimeInterval = 0
     @Binding var isLoading: Bool
     var onNavigate: ((URL) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView(frame: .zero, configuration: SharedWeb.makeConfiguration(section: section))
+        let webView = WKWebView(frame: .zero, configuration: SharedWeb.makeConfiguration(section: section, handler: context.coordinator))
         webView.customUserAgent = SharedWeb.userAgent
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
@@ -115,9 +118,19 @@ struct InstagramWebView: UIViewRepresentable {
         context.coordinator.lastToken = resetToken
         context.coordinator.urlObservation = webView.observe(\.url, options: [.new]) { [weak coordinator = context.coordinator] view, _ in
             guard let url = view.url else { return }
-            DispatchQueue.main.async { coordinator?.parent.onNavigate?(url) }
+            DispatchQueue.main.async {
+                coordinator?.applyChrome(for: url.path)
+                coordinator?.parent.onNavigate?(url)
+            }
         }
-        webView.load(URLRequest(url: startURL))
+        let request = URLRequest(url: startURL)
+        if loadDelay > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + loadDelay) { [weak webView] in
+                if webView?.url == nil { webView?.load(request) }
+            }
+        } else {
+            webView.load(request)
+        }
         return webView
     }
 
@@ -129,7 +142,7 @@ struct InstagramWebView: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var parent: InstagramWebView
         weak var webView: WKWebView?
         var lastToken = 0
@@ -137,6 +150,44 @@ struct InstagramWebView: UIViewRepresentable {
         private weak var popupController: UIViewController?
 
         init(parent: InstagramWebView) { self.parent = parent }
+
+        /// Mensajes del filtro: cambios de ruta internos y el usuario detectado.
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let body = message.body as? [String: Any],
+                  let type = body["type"] as? String,
+                  let value = body["value"] as? String else { return }
+            switch type {
+            case "path":
+                if let url = URL(string: "https://www.instagram.com" + value) {
+                    applyChrome(for: url.path)
+                    parent.onNavigate?(url)
+                }
+            case "user":
+                let clean = value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                if !clean.isEmpty, clean.range(of: "^[A-Za-z0-9._]+$", options: .regularExpression) != nil {
+                    UserDefaults.standard.set(clean, forKey: "instagramUser")
+                }
+            default:
+                break
+            }
+        }
+
+        /// Historias: fondo negro y sin "tirar para recargar", para verlas a pantalla completa.
+        func applyChrome(for path: String) {
+            guard let webView = webView else { return }
+            let story = path.lowercased().hasPrefix("/stories/")
+            let color: UIColor = story ? .black : .systemBackground
+            webView.backgroundColor = color
+            webView.scrollView.backgroundColor = color
+            webView.scrollView.bounces = !story
+            if story {
+                webView.scrollView.refreshControl = nil
+            } else if webView.scrollView.refreshControl == nil {
+                let refresh = UIRefreshControl()
+                refresh.addTarget(self, action: #selector(Coordinator.refresh(_:)), for: .valueChanged)
+                webView.scrollView.refreshControl = refresh
+            }
+        }
 
         @objc func refresh(_ sender: UIRefreshControl) {
             webView?.reload()
@@ -257,6 +308,15 @@ struct InstagramWebView: UIViewRepresentable {
             }
             top.present(alert, animated: true)
         }
+    }
+}
+
+/// Evita que el WKUserContentController retenga al coordinador para siempre.
+final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+    init(_ target: WKScriptMessageHandler) { self.target = target }
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(controller, didReceive: message)
     }
 }
 

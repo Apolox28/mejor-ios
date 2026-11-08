@@ -96,6 +96,8 @@ enum FocusFilter {
         /* Búsqueda: sin cuadrícula de publicaciones sugeridas */
         'html[data-mj="search"] main a[href^="/p/"],',
         'html[data-mj="search"] main a[href^="/reel/"] { display: none !important; }',
+        /* Historias: fondo negro de borde a borde */
+        'html[data-mj="story"], html[data-mj="story"] body { background: #000 !important; }',
         /* Sin resaltado gris al tocar */
         '* { -webkit-tap-highlight-color: transparent; }'
       ].join('\n');
@@ -144,6 +146,39 @@ enum FocusFilter {
         }
       }
 
+      function post(type, value) {
+        try { window.webkit.messageHandlers.mejor.postMessage({ type: type, value: value }); } catch (e) {}
+      }
+
+      /* Tu usuario: el enlace con tu foto en la barra inferior de Instagram. */
+      var me = null;
+      try { me = localStorage.getItem('mejorUser'); } catch (e) {}
+      function findMe() {
+        var imgs = document.querySelectorAll('a[href] img');
+        for (var i = 0; i < imgs.length; i++) {
+          var a = imgs[i].closest('a');
+          var href = a.getAttribute('href') || '';
+          if (!/^\/[A-Za-z0-9._]+\/?$/.test(href)) continue;
+          var alt = (imgs[i].getAttribute('alt') || '').toLowerCase();
+          if (alt.indexOf('profil') === -1 && alt.indexOf('perfil') === -1) continue;
+          if (!fixedAncestor(a, 12)) continue;
+          var user = href.replace(/\//g, '');
+          if (user !== me) {
+            me = user;
+            try { localStorage.setItem('mejorUser', user); } catch (e) {}
+            post('user', user);
+          }
+          return;
+        }
+      }
+
+      function goToProfile() {
+        if (window.__merjoSection !== 'profile') return false;
+        var path = location.pathname;
+        if ((path === '/' || path === '') && me) { location.replace('/' + me + '/'); return true; }
+        return false;
+      }
+
       var last = null;
       function check() {
         var path = location.pathname.toLowerCase();
@@ -152,12 +187,15 @@ enum FocusFilter {
         if (path !== last) {
           last = path;
           document.documentElement.setAttribute('data-mj', kind(path));
+          post('path', path);
         }
         addStyle();
       }
 
       function sweep() {
         check();
+        findMe();
+        if (goToProfile()) return;
         hideInstagramTabBar();
         hideAppBanners();
         dismissNags();
