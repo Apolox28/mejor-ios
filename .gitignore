@@ -1,7 +1,7 @@
 build/
 Payload/
 *.ipa
-Directo.xcodeproj/
-Directo/Info.plist
-Directo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+MerJo.xcodeproj/
+MerJo/Info.plist
+MerJo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
 .DS_Store

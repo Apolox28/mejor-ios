@@ -21,8 +21,8 @@ enum FocusFilter {
     /// cargas completas vigilamos los cambios de ruta internos.
     static let script = #"""
     (function () {
-      if (window.__directoLoaded) return;
-      window.__directoLoaded = true;
+      if (window.__merjoLoaded) return;
+      window.__merjoLoaded = true;
 
       var CSS = [
         /* Inicio: se ocultan las publicaciones; queda solo la fila de historias */
@@ -39,9 +39,9 @@ enum FocusFilter {
       ].join('\n');
 
       function addStyle() {
-        if (document.getElementById('directo-style')) return;
+        if (document.getElementById('merjo-style')) return;
         var s = document.createElement('style');
-        s.id = 'directo-style';
+        s.id = 'merjo-style';
         s.textContent = CSS;
         (document.head || document.documentElement).appendChild(s);
       }

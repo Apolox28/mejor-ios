@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct DirectoApp: App {
+struct MerJoApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()

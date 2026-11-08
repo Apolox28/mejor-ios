@@ -34,7 +34,7 @@ struct InstagramWebView: UIViewRepresentable {
 
         let controller = WKUserContentController()
         controller.addUserScript(WKUserScript(
-            source: "window.__directoSection = '\(section.rawValue)';",
+            source: "window.__merjoSection = '\(section.rawValue)';",
             injectionTime: .atDocumentStart, forMainFrameOnly: true))
         controller.addUserScript(WKUserScript(
             source: FocusFilter.script,

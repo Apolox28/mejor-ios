@@ -15,14 +15,14 @@ jobs:
         run: brew install xcodegen
 
       - name: Generar ícono
-        run: swift scripts/make-icon.swift Directo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+        run: swift scripts/make-icon.swift MerJo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
 
       - name: Generar proyecto Xcode
         run: xcodegen generate
 
       - name: Compilar (sin firmar)
         run: |
-          xcodebuild -project Directo.xcodeproj -scheme Directo \
+          xcodebuild -project MerJo.xcodeproj -scheme MerJo \
             -configuration Release -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
@@ -32,10 +32,10 @@ jobs:
       - name: Empaquetar .ipa
         run: |
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/Directo.app Payload/
-          zip -qry Directo.ipa Payload
+          cp -R build/Build/Products/Release-iphoneos/MerJo.app Payload/
+          zip -qry MerJo.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Directo-ipa
-          path: Directo.ipa
+          name: MerJo-ipa
+          path: MerJo.ipa

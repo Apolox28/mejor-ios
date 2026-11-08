@@ -1,4 +1,4 @@
-# Directo: Instagram sin distracciones (iOS 15+)
+# MerJo: Instagram sin distracciones (iOS 15+)
 
 Esta app tiene solo tres pestañas:
 
@@ -16,7 +16,7 @@ La app carga la versión web oficial de Instagram (instagram.com) dentro de la a
 Inicias sesión en la página de Instagram, igual que en Safari. La app no guarda ni ve tu contraseña.
 No usa la API privada de Instagram, así que el riesgo de bloqueo de cuenta es mucho menor que con las apps "clon".
 
-Hay un límite: si Instagram cambia el diseño de su web, puede que algún filtro deje de ocultar algo y haya que ajustar `Directo/FocusFilter.swift`.
+Hay un límite: si Instagram cambia el diseño de su web, puede que algún filtro deje de ocultar algo y haya que ajustar `MerJo/FocusFilter.swift`.
 
 ## 1. Conseguir el .ipa (sin Mac)
 
@@ -24,13 +24,15 @@ Las apps de iPhone solo se compilan en macOS. Por eso el proyecto se compila gra
 
 1. Sube esta carpeta a un repositorio de GitHub (rama `main`).
 2. En el repositorio, entra a **Actions** → **Compilar IPA**. Se ejecuta solo con cada cambio (o con **Run workflow**).
-3. Cuando termine (unos 5 minutos), descarga **Directo-ipa** al final de la página de esa ejecución. Dentro del .zip viene `Directo.ipa`.
+3. Cuando termine (unos 5 minutos), descarga **MerJo-ipa** al final de la página de esa ejecución. Dentro del .zip viene `MerJo.ipa`.
 
 ## 2. Instalarlo en el iPhone
 
-El .ipa sale **sin firmar**, así que se instala con una herramienta que lo firma con tu Apple ID:
+**Con TrollStore (lo más fácil):** pasa `MerJo.ipa` al iPhone (AirDrop, Archivos o iCloud), ábrelo con TrollStore y toca Instalar. Queda instalada de forma permanente, sin renovar cada 7 días.
 
-- **Sideloadly** (Windows): conecta el iPhone por cable, arrastra `Directo.ipa`, pon tu Apple ID y dale a Start.
+**Sin TrollStore:** el .ipa sale **sin firmar**, así que se instala con una herramienta que lo firma con tu Apple ID:
+
+- **Sideloadly** (Windows): conecta el iPhone por cable, arrastra `MerJo.ipa`, pon tu Apple ID y dale a Start.
 - **AltStore**: también funciona desde Windows.
 
 Con un Apple ID gratuito la app dura **7 días**; después hay que volver a instalarla (Sideloadly puede renovarla sola). Con una cuenta de desarrollador pagada dura un año.
@@ -38,8 +40,8 @@ En el iPhone, después de instalar: **Ajustes → General → VPN y gestión de 
 
 ## Archivos
 
-- `Directo/DirectoApp.swift`: pestañas de la app.
-- `Directo/InstagramWebView.swift`: el navegador interno (sesión compartida, deslizar para recargar, enlaces externos van a Safari).
-- `Directo/FocusFilter.swift`: qué se oculta y qué se bloquea.
+- `MerJo/MerJoApp.swift`: pestañas de la app.
+- `MerJo/InstagramWebView.swift`: el navegador interno (sesión compartida, deslizar para recargar, enlaces externos van a Safari).
+- `MerJo/FocusFilter.swift`: qué se oculta y qué se bloquea.
 - `project.yml`: definición del proyecto (XcodeGen genera el proyecto de Xcode a partir de esto).
 - `.github/workflows/build-ipa.yml`: la compilación automática.
