@@ -30,9 +30,9 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/MerJo.app Payload/
-          zip -qry MerJo.ipa Payload
+          zip -qry Mejor.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MerJo-ipa
-          path: MerJo.ipa
+          name: Mejor-ipa
+          path: Mejor.ipa

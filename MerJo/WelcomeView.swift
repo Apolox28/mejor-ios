@@ -17,7 +17,7 @@ struct LogoImage: View {
             .interpolation(.high)
             .frame(width: size, height: size)
             .clipShape(RoundedRectangle(cornerRadius: size * 0.225, style: .continuous))
-            .shadow(color: Brand.pink.opacity(0.35), radius: 24, y: 8)
+            .shadow(color: Brand.accent.opacity(0.35), radius: 24, y: 8)
     }
 }
 
@@ -34,7 +34,7 @@ struct WelcomeView: View {
 
                 LogoImage(size: 112)
 
-                Text("MerJo")
+                Text("Mejor")
                     .font(.system(size: 42, weight: .heavy, design: .rounded))
                     .foregroundColor(.white)
                     .padding(.top, 22)
@@ -61,14 +61,14 @@ struct WelcomeView: View {
                 } label: {
                     Text("Iniciar sesión con Instagram")
                         .font(.system(size: 17, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
+                        .foregroundColor(Brand.night)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 17)
                         .background(Brand.ring)
                         .clipShape(Capsule())
                 }
 
-                Text("Entras en la página oficial de Instagram. MerJo no ve ni guarda tu contraseña.")
+                Text("Entras en la página oficial de Instagram. Mejor no ve ni guarda tu contraseña.")
                     .font(.footnote)
                     .multilineTextAlignment(.center)
                     .foregroundColor(.white.opacity(0.5))
@@ -156,6 +156,6 @@ struct LoginSheet: View {
             }
         }
         .navigationViewStyle(.stack)
-        .accentColor(Brand.pink)
+        .accentColor(Brand.accent)
     }
 }

@@ -13,7 +13,7 @@ targets:
     info:
       path: MerJo/Info.plist
       properties:
-        CFBundleDisplayName: MerJo
+        CFBundleDisplayName: Mejor
         CFBundleShortVersionString: "1.1"
         CFBundleVersion: "2"
         UILaunchScreen:

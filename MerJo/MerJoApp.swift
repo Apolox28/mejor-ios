@@ -14,15 +14,16 @@ struct MerJoApp: App {
 // MARK: - Marca
 
 enum Brand {
-    static let pink = Color(red: 1.0, green: 0.31, blue: 0.48)
-    static let backgroundTop = Color(red: 0.106, green: 0.078, blue: 0.20)
-    static let backgroundBottom = Color(red: 0.227, green: 0.086, blue: 0.25)
-    static let background = LinearGradient(colors: [backgroundTop, backgroundBottom],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let ring = LinearGradient(colors: [Color(red: 1.0, green: 0.71, blue: 0.28),
-                                              pink,
-                                              Color(red: 0.64, green: 0.29, blue: 1.0)],
-                                     startPoint: .bottomLeading, endPoint: .topTrailing)
+    /// Luz del faro.
+    static let accent = Color(red: 0.96, green: 0.71, blue: 0.27)
+    /// Noche: azul marino profundo.
+    static let night = Color(red: 0.016, green: 0.039, blue: 0.118)
+    static let backgroundTop = Color(red: 0.027, green: 0.063, blue: 0.176)
+    static let background = LinearGradient(colors: [backgroundTop, night],
+                                           startPoint: .top, endPoint: .bottom)
+    static let ring = LinearGradient(colors: [Color(red: 1.0, green: 0.82, blue: 0.45), accent,
+                                              Color(red: 0.91, green: 0.56, blue: 0.20)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing)
 }
 
 // MARK: - Secciones
@@ -146,6 +147,6 @@ struct MainTabs: View {
                     .tag(section)
             }
         }
-        .accentColor(Brand.pink)
+        .accentColor(Brand.accent)
     }
 }

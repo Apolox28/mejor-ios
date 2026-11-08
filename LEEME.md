@@ -1,6 +1,6 @@
-<img src="assets/logo-512.png" width="120" alt="Logo de MerJo">
+<img src="assets/logo-512.png" width="120" alt="Logo de Mejor">
 
-# MerJo: Instagram sin distracciones (iOS 15+)
+# Mejor: Instagram sin distracciones (iOS 15+)
 
 Esta app tiene solo tres pestañas:
 
@@ -26,15 +26,15 @@ Las apps de iPhone solo se compilan en macOS. Por eso el proyecto se compila gra
 
 1. Sube esta carpeta a un repositorio de GitHub (rama `main`).
 2. En el repositorio, entra a **Actions** → **Compilar IPA**. Se ejecuta solo con cada cambio (o con **Run workflow**).
-3. Cuando termine (unos 5 minutos), descarga **MerJo-ipa** al final de la página de esa ejecución. Dentro del .zip viene `MerJo.ipa`.
+3. Cuando termine (unos 5 minutos), descarga **Mejor-ipa** al final de la página de esa ejecución. Dentro del .zip viene `Mejor.ipa`.
 
 ## 2. Instalarlo en el iPhone
 
-**Con TrollStore (lo más fácil):** pasa `MerJo.ipa` al iPhone (AirDrop, Archivos o iCloud), ábrelo con TrollStore y toca Instalar. Queda instalada de forma permanente, sin renovar cada 7 días.
+**Con TrollStore (lo más fácil):** pasa `Mejor.ipa` al iPhone (AirDrop, Archivos o iCloud), ábrelo con TrollStore y toca Instalar. Queda instalada de forma permanente, sin renovar cada 7 días.
 
 **Sin TrollStore:** el .ipa sale **sin firmar**, así que se instala con una herramienta que lo firma con tu Apple ID:
 
-- **Sideloadly** (Windows): conecta el iPhone por cable, arrastra `MerJo.ipa`, pon tu Apple ID y dale a Start.
+- **Sideloadly** (Windows): conecta el iPhone por cable, arrastra `Mejor.ipa`, pon tu Apple ID y dale a Start.
 - **AltStore**: también funciona desde Windows.
 
 Con un Apple ID gratuito la app dura **7 días**; después hay que volver a instalarla (Sideloadly puede renovarla sola). Con una cuenta de desarrollador pagada dura un año.
