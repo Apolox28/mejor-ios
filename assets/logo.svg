@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1B1433"/>
+      <stop offset="1" stop-color="#3A1640"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFB547"/>
+      <stop offset="0.5" stop-color="#FF4F7B"/>
+      <stop offset="1" stop-color="#A24BFF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.48" r="0.5">
+      <stop offset="0" stop-color="#FF4F7B" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FF4F7B" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+
+  <!-- Anillo de historias: segmentos como historias sin ver -->
+  <circle cx="512" cy="500" r="340" fill="none" stroke="url(#ring)" stroke-width="40"
+          stroke-linecap="round" stroke-dasharray="292 64" transform="rotate(-78 512 500)"/>
+
+  <!-- Burbuja de mensaje -->
+  <path d="M512 245
+           a255 255 0 1 1 -170 446
+           l-92 52
+           q-14 8 -12 -8
+           l20 -104
+           a255 255 0 0 1 254 -386 z"
+        fill="#FFFFFF"/>
+
+  <!-- M -->
+  <polyline points="392,598 392,424 512,532 632,424 632,598"
+            fill="none" stroke="#2A1440" stroke-width="66"
+            stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -3,5 +3,4 @@ Payload/
 *.ipa
 MerJo.xcodeproj/
 MerJo/Info.plist
-MerJo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
 .DS_Store

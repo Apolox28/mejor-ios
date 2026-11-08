@@ -1,3 +1,5 @@
+<img src="assets/logo-512.png" width="120" alt="Logo de MerJo">
+
 # MerJo: Instagram sin distracciones (iOS 15+)
 
 Esta app tiene solo tres pestañas:

@@ -14,9 +14,6 @@ jobs:
       - name: Instalar XcodeGen
         run: brew install xcodegen
 
-      - name: Generar ícono
-        run: swift scripts/make-icon.swift MerJo/Assets.xcassets/AppIcon.appiconset/icon-1024.png
-
       - name: Generar proyecto Xcode
         run: xcodegen generate
 
