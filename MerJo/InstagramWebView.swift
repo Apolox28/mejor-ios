@@ -1,78 +1,155 @@
 import SwiftUI
 import WebKit
 
-/// Todas las pestañas comparten cookies, así que inicias sesión una sola vez.
+/// Todas las pantallas comparten cookies, así que inicias sesión una sola vez.
 enum SharedWeb {
     static let processPool = WKProcessPool()
     static let dataStore = WKWebsiteDataStore.default()
 
     static let allowedHosts = [
         "instagram.com", "cdninstagram.com", "facebook.com",
-        "fbcdn.net", "fb.com", "fbsbx.com", "accountscenter.instagram.com"
+        "fbcdn.net", "fb.com", "fbsbx.com", "meta.com"
     ]
+
+    /// Esquemas que intentan abrir la app oficial o la App Store: se ignoran.
+    static let blockedSchemes = ["instagram", "instagram-stories", "fb", "fb-messenger",
+                                 "itms", "itms-apps", "itms-appss", "intent"]
 
     static func isAllowed(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return true }
         return allowedHosts.contains { host == $0 || host.hasSuffix("." + $0) }
     }
+
+    static func isAppStore(_ url: URL) -> Bool {
+        let host = url.host?.lowercased() ?? ""
+        return host == "apps.apple.com" || host == "itunes.apple.com"
+    }
+
+    /// Identidad de Safari para iPhone con la versión real del sistema.
+    /// Sin esto Instagram trata la app como un navegador integrado y falla el login.
+    static let userAgent: String = {
+        let version = UIDevice.current.systemVersion
+        let parts = version.split(separator: ".")
+        let major = parts.first.map(String.init) ?? "15"
+        let minor = parts.count > 1 ? String(parts[1]) : "0"
+        let osToken = version.replacingOccurrences(of: ".", with: "_")
+        return "Mozilla/5.0 (iPhone; CPU iPhone OS \(osToken) like Mac OS X) "
+            + "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            + "Version/\(major).\(minor) Mobile/15E148 Safari/604.1"
+    }()
+
+    static func makeConfiguration(section: Section?) -> WKWebViewConfiguration {
+        let config = WKWebViewConfiguration()
+        config.processPool = processPool
+        config.websiteDataStore = dataStore
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
+        config.defaultWebpagePreferences.preferredContentMode = .mobile
+
+        let controller = WKUserContentController()
+        if let section = section {
+            controller.addUserScript(WKUserScript(
+                source: "window.__merjoSection = '\(section.rawValue)';",
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            controller.addUserScript(WKUserScript(
+                source: FocusFilter.script,
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        } else {
+            controller.addUserScript(WKUserScript(
+                source: FocusFilter.loginScript,
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
+        config.userContentController = controller
+        return config
+    }
+}
+
+/// Una página de Instagram con indicador de carga mientras aparece.
+struct WebScreen: View {
+    let startURL: URL
+    let section: Section?
+    let resetToken: Int
+    var onNavigate: ((URL) -> Void)? = nil
+
+    @State private var isLoading = true
+
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            InstagramWebView(startURL: startURL, section: section, resetToken: resetToken,
+                             isLoading: $isLoading, onNavigate: onNavigate)
+                .opacity(isLoading ? 0 : 1)
+            if isLoading {
+                ProgressView().scaleEffect(1.2)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: isLoading)
+    }
 }
 
 struct InstagramWebView: UIViewRepresentable {
-    let section: Section
-    @Binding var reselect: Section?
+    let startURL: URL
+    let section: Section?
+    let resetToken: Int
+    @Binding var isLoading: Bool
+    var onNavigate: ((URL) -> Void)?
 
-    func makeCoordinator() -> Coordinator { Coordinator(section: section) }
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeUIView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        config.processPool = SharedWeb.processPool
-        config.websiteDataStore = SharedWeb.dataStore
-        config.allowsInlineMediaPlayback = true
-        config.mediaTypesRequiringUserActionForPlayback = []
-        // Hace que Instagram nos trate como Safari móvil.
-        config.applicationNameForUserAgent = "Version/16.0 Mobile/15E148 Safari/604.1"
-
-        let controller = WKUserContentController()
-        controller.addUserScript(WKUserScript(
-            source: "window.__merjoSection = '\(section.rawValue)';",
-            injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        controller.addUserScript(WKUserScript(
-            source: FocusFilter.script,
-            injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        config.userContentController = controller
-
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = WKWebView(frame: .zero, configuration: SharedWeb.makeConfiguration(section: section))
+        webView.customUserAgent = SharedWeb.userAgent
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
-        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
+        webView.isOpaque = false
+        webView.backgroundColor = .systemBackground
+        webView.scrollView.backgroundColor = .systemBackground
+        webView.scrollView.keyboardDismissMode = .interactive
 
         let refresh = UIRefreshControl()
         refresh.addTarget(context.coordinator, action: #selector(Coordinator.refresh(_:)), for: .valueChanged)
         webView.scrollView.refreshControl = refresh
 
         context.coordinator.webView = webView
-        webView.load(URLRequest(url: section.startURL))
+        context.coordinator.lastToken = resetToken
+        context.coordinator.urlObservation = webView.observe(\.url, options: [.new]) { [weak coordinator = context.coordinator] view, _ in
+            guard let url = view.url else { return }
+            DispatchQueue.main.async { coordinator?.parent.onNavigate?(url) }
+        }
+        webView.load(URLRequest(url: startURL))
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        if reselect == section {
-            DispatchQueue.main.async { reselect = nil }
-            webView.load(URLRequest(url: section.startURL))
+        context.coordinator.parent = self
+        if context.coordinator.lastToken != resetToken {
+            context.coordinator.lastToken = resetToken
+            webView.load(URLRequest(url: startURL))
         }
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
-        let section: Section
+        var parent: InstagramWebView
         weak var webView: WKWebView?
+        var lastToken = 0
+        var urlObservation: NSKeyValueObservation?
+        private weak var popupController: UIViewController?
 
-        init(section: Section) { self.section = section }
+        init(parent: InstagramWebView) { self.parent = parent }
 
         @objc func refresh(_ sender: UIRefreshControl) {
             webView?.reload()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { sender.endRefreshing() }
         }
+
+        private func finishLoading() {
+            DispatchQueue.main.async {
+                if self.parent.isLoading { self.parent.isLoading = false }
+            }
+        }
+
+        // MARK: Navegación
 
         func webView(_ webView: WKWebView,
                      decidePolicyFor action: WKNavigationAction,
@@ -80,9 +157,16 @@ struct InstagramWebView: UIViewRepresentable {
             guard let url = action.request.url else { return decisionHandler(.allow) }
             let scheme = url.scheme?.lowercased() ?? ""
 
-            if ["about", "blob", "data"].contains(scheme) { return decisionHandler(.allow) }
+            if ["about", "blob", "data", "javascript"].contains(scheme) {
+                return decisionHandler(.allow)
+            }
 
-            // Enlaces a otros sitios se abren en Safari, no dentro de la app.
+            // "Abrir en la app" / App Store: se ignoran para no salir de MerJo.
+            if SharedWeb.blockedSchemes.contains(scheme) || SharedWeb.isAppStore(url) {
+                return decisionHandler(.cancel)
+            }
+
+            // Otros sitios (enlaces de una bio, etc.) se abren en Safari.
             if (scheme != "http" && scheme != "https") || !SharedWeb.isAllowed(url) {
                 if action.targetFrame?.isMainFrame ?? true {
                     UIApplication.shared.open(url)
@@ -91,8 +175,9 @@ struct InstagramWebView: UIViewRepresentable {
                 return decisionHandler(.allow)
             }
 
-            // Bloqueo de secciones adictivas en cargas completas de página.
-            if action.targetFrame?.isMainFrame == true,
+            // Secciones bloqueadas en cargas completas de página.
+            if parent.section != nil,
+               action.targetFrame?.isMainFrame == true,
                let redirect = FocusFilter.redirect(for: url) {
                 webView.load(URLRequest(url: redirect))
                 return decisionHandler(.cancel)
@@ -100,20 +185,83 @@ struct InstagramWebView: UIViewRepresentable {
             decisionHandler(.allow)
         }
 
-        // Enlaces con target="_blank": se abren en la misma vista.
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            webView.scrollView.refreshControl?.endRefreshing()
+            finishLoading()
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            finishLoading()
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            finishLoading()
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            webView.reload()
+        }
+
+        // MARK: Ventanas emergentes (por ejemplo "Continuar con Facebook")
+
         func webView(_ webView: WKWebView,
                      createWebViewWith configuration: WKWebViewConfiguration,
                      for action: WKNavigationAction,
                      windowFeatures: WKWindowFeatures) -> WKWebView? {
-            if let url = action.request.url {
-                if SharedWeb.isAllowed(url) { webView.load(URLRequest(url: url)) }
-                else { UIApplication.shared.open(url) }
+            if let url = action.request.url,
+               url.scheme == "http" || url.scheme == "https",
+               !SharedWeb.isAllowed(url) {
+                UIApplication.shared.open(url)
+                return nil
             }
-            return nil
+
+            let popup = WKWebView(frame: .zero, configuration: configuration)
+            popup.customUserAgent = SharedWeb.userAgent
+            popup.navigationDelegate = self
+            popup.uiDelegate = self
+
+            let controller = UIViewController()
+            controller.view = popup
+            let nav = UINavigationController(rootViewController: controller)
+            controller.navigationItem.leftBarButtonItem = UIBarButtonItem(
+                systemItem: .close,
+                primaryAction: UIAction { [weak nav] _ in nav?.dismiss(animated: true) })
+            popupController = nav
+
+            webView.window?.rootViewController?.topMost.present(nav, animated: true)
+            return popup
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            webView.scrollView.refreshControl?.endRefreshing()
+        func webViewDidClose(_ webView: WKWebView) {
+            popupController?.dismiss(animated: true)
         }
+
+        // Diálogos de JavaScript (confirmaciones como "¿Anular envío?").
+        func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+            present(message: message, in: webView, actions: [("OK", true)]) { _ in completionHandler() }
+        }
+
+        func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+            present(message: message, in: webView,
+                    actions: [("Cancelar", false), ("Aceptar", true)], completion: completionHandler)
+        }
+
+        private func present(message: String, in webView: WKWebView,
+                             actions: [(String, Bool)], completion: @escaping (Bool) -> Void) {
+            guard let top = webView.window?.rootViewController?.topMost else { return completion(false) }
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            for (title, value) in actions {
+                alert.addAction(UIAlertAction(title: title, style: value ? .default : .cancel) { _ in completion(value) })
+            }
+            top.present(alert, animated: true)
+        }
+    }
+}
+
+extension UIViewController {
+    var topMost: UIViewController {
+        presentedViewController?.topMost ?? self
     }
 }
