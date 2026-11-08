@@ -1,17 +1,17 @@
-name: MerJo
+name: Mejor
 options:
   bundleIdPrefix: com.apolox28
   deploymentTarget:
     iOS: "15.0"
 targets:
-  MerJo:
+  Mejor:
     type: application
     platform: iOS
     deploymentTarget: "15.0"
     sources:
-      - MerJo
+      - Mejor
     info:
-      path: MerJo/Info.plist
+      path: Mejor/Info.plist
       properties:
         CFBundleDisplayName: Mejor
         CFBundleShortVersionString: "1.2"
@@ -27,6 +27,7 @@ targets:
         NSPhotoLibraryAddUsageDescription: Para guardar fotos que te envían.
     settings:
       base:
+        # Se mantiene el identificador antiguo para que las versiones nuevas se instalen encima.
         PRODUCT_BUNDLE_IDENTIFIER: com.apolox28.merjo
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.0"

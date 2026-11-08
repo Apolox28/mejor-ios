@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 @main
-struct MerJoApp: App {
+struct MejorApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()

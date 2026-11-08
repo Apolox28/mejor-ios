@@ -212,7 +212,7 @@ struct InstagramWebView: UIViewRepresentable {
                 return decisionHandler(.allow)
             }
 
-            // "Abrir en la app" / App Store: se ignoran para no salir de MerJo.
+            // "Abrir en la app" / App Store: se ignoran para no salir de Mejor.
             if SharedWeb.blockedSchemes.contains(scheme) || SharedWeb.isAppStore(url) {
                 return decisionHandler(.cancel)
             }

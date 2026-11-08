@@ -1,6 +1,6 @@
 build/
 Payload/
 *.ipa
-MerJo.xcodeproj/
-MerJo/Info.plist
+Mejor.xcodeproj/
+Mejor/Info.plist
 .DS_Store

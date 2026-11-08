@@ -125,7 +125,7 @@ enum FocusFilter {
       }
 
       /* La barra inferior de Instagram (Inicio, Explorar, Reels...) se oculta entera:
-         MerJo ya tiene su propia barra con Mensajes, Historias y Buscar. */
+         Mejor ya tiene su propia barra con Mensajes, Historias, Buscar y Perfil. */
       function hideInstagramTabBar() {
         var links = document.querySelectorAll('a[href="/explore/"], a[href="/reels/"], a[href^="/reels/"]');
         for (var i = 0; i < links.length; i++) {
