@@ -120,7 +120,7 @@ struct LoginSheet: View {
 
     var body: some View {
         NavigationView {
-            WebScreen(startURL: loginURL, section: nil, resetToken: reloadToken) { url in
+            WebScreen(startURL: loginURL, resetToken: reloadToken) { url in
                 // Si la web ya salió del login, la sesión está iniciada.
                 let path = url.path.lowercased()
                 if path.hasPrefix("/accounts/onetap") {
