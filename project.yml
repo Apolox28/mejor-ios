@@ -14,8 +14,8 @@ targets:
       path: Mejor/Info.plist
       properties:
         CFBundleDisplayName: Mejor
-        CFBundleShortVersionString: "2.1"
-        CFBundleVersion: "5"
+        CFBundleShortVersionString: "1.3"
+        CFBundleVersion: "6"
         UILaunchScreen:
           UIColorName: LaunchBackground
         UIRequiresFullScreen: true
