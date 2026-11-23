@@ -1,5 +1,4 @@
 import SwiftUI
-import WebKit
 import AVFoundation
 
 @main
@@ -10,10 +9,7 @@ struct MejorApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            RootView()
-                .preferredColorScheme(nil)
-        }
+        WindowGroup { RootView() }
     }
 }
 
@@ -34,55 +30,30 @@ enum Brand {
 
 // MARK: - Sesión
 
-/// Sabe si hay una sesión de Instagram mirando la cookie "sessionid".
-final class Session: NSObject, ObservableObject, WKHTTPCookieStoreObserver {
-    enum State { case checking, loggedOut, loggedIn }
+/// Sabe si hay sesión mirando el permiso guardado en el llavero.
+final class Session: ObservableObject {
+    enum State { case loggedOut, loggedIn }
 
-    @Published private(set) var state: State = .checking
+    @Published private(set) var state: State
 
-    private var store: WKHTTPCookieStore { SharedWeb.dataStore.httpCookieStore }
-
-    override init() {
-        super.init()
-        store.add(self)
-        // Instagram rechazó la sesión: se borra y vuelves a la bienvenida para entrar de nuevo.
+    init() {
+        state = AuthStore.shared.isLoggedIn ? .loggedIn : .loggedOut
+        // Instagram rechazó la sesión: se borra y se vuelve a la bienvenida.
         InstagramAPI.shared.onLoggedOut = { [weak self] in
-            if self?.state == .loggedIn { self?.signOut() }
+            guard let self = self, self.state == .loggedIn else { return }
+            InstagramAPI.shared.logOut()
+            self.state = .loggedOut
         }
-        refresh()
     }
 
     func refresh() {
-        store.getAllCookies { [weak self] cookies in
-            let hasSession = cookies.contains { cookie in
-                cookie.name == "sessionid"
-                    && cookie.domain.hasSuffix("instagram.com")
-                    && !cookie.value.isEmpty
-                    && (cookie.expiresDate ?? .distantFuture) > Date()
-            }
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                let new: State = hasSession ? .loggedIn : .loggedOut
-                if !hasSession { UserDefaults.standard.removeObject(forKey: "instagramUser") }
-                if self.state != new { self.state = new }
-            }
-        }
-    }
-
-    /// Se usa cuando la web ya salió del login aunque la cookie tarde en aparecer.
-    func markLoggedIn() {
-        if state != .loggedIn { state = .loggedIn }
+        let new: State = AuthStore.shared.isLoggedIn ? .loggedIn : .loggedOut
+        if state != new { state = new }
     }
 
     func signOut() {
-        SharedWeb.dataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
-                                       modifiedSince: .distantPast) { [weak self] in
-            DispatchQueue.main.async { self?.state = .loggedOut }
-        }
-    }
-
-    func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
-        refresh()
+        InstagramAPI.shared.logOut()
+        state = .loggedOut
     }
 }
 
@@ -94,7 +65,6 @@ struct RootView: View {
     var body: some View {
         ZStack {
             switch session.state {
-            case .checking:  SplashView().transition(.opacity)
             case .loggedOut: WelcomeView().transition(.opacity)
             case .loggedIn:  MainTabs().transition(.opacity)
             }
@@ -104,15 +74,13 @@ struct RootView: View {
     }
 }
 
-/// Barra propia en vez de TabView: todas las pestañas quedan vivas y precargadas,
-/// y la barra se puede esconder mientras ves una historia.
-/// Pestañas nativas. No existe ninguna pantalla de Reels, Explorar ni feed:
+/// Pestañas nativas. No existe ninguna pantalla de Reels, Explorar ni feed de Reels:
 /// la app nunca los pide a Instagram.
 struct MainTabs: View {
     var body: some View {
         TabView {
             HomeView()
-                .tabItem { Label("Home", systemImage: "circle.dashed.inset.filled") }
+                .tabItem { Label("Home", systemImage: "house") }
             SearchView()
                 .tabItem { Label("Buscar", systemImage: "magnifyingglass") }
             MessagesView()

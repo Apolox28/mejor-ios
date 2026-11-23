@@ -1,43 +1,48 @@
 import Foundation
 import UIKit
-import WebKit
 
-// Cliente nativo: usa la sesión que dejó el login web (cookies) y las llamadas
-// internas de Instagram. Nunca pide Reels, Explorar ni sugerencias.
-// shortcut: son endpoints no documentados; si Instagram los cambia, se ajustan aquí
+// Cliente nativo del propio usuario: inicia sesión con su cuenta y consulta
+// Instagram con una sola identidad de principio a fin (como instagrapi).
+// Nunca pide Reels, Explorar ni sugerencias.
+// shortcut: endpoints no documentados; si Instagram los cambia, se ajustan aquí
 // (el Diagnóstico muestra qué responde cada uno).
 
 enum APIError: LocalizedError {
     case loggedOut
-    case http(Int, String)
     case message(String)
 
     var errorDescription: String? {
         switch self {
         case .loggedOut: return "Tu sesión de Instagram terminó. Vuelve a iniciar sesión."
-        case .http(let code, let path): return "Instagram respondió con un error (\(code)) en \(path)."
         case .message(let text): return text
         }
     }
 }
 
+/// Lo que pide Instagram después de la contraseña.
+enum LoginStep: Equatable {
+    case done
+    case twoFactor(identifier: String, hint: String)
+    case checkpoint(path: String, hint: String)
+}
+
 final class InstagramAPI {
     static let shared = InstagramAPI()
 
-    /// Lo conecta Session para volver a la pantalla de bienvenida si la sesión expira.
+    /// Lo conecta Session para volver a la bienvenida si la sesión expira.
     var onLoggedOut: (() -> Void)?
 
-    /// Registro de las últimas respuestas (solo códigos y nombres de campos, nunca contenido).
+    /// Registro de respuestas (solo códigos y nombres de campos, nunca contenido).
     @MainActor private(set) var log: [String] = []
 
-    /// Instagram atiende cada llamada en un lugar distinto; se prueban en orden.
-    enum Host: String {
-        case web   // www.instagram.com como la web
-        case app   // i.instagram.com como la app de iPhone
-        case iweb  // i.instagram.com con identidad web
-        var base: String {
-            self == .web ? "https://www.instagram.com/api/v1/" : "https://i.instagram.com/api/v1/"
-        }
+    private let auth = AuthStore.shared
+    private let appVersion = "449.0.0.52.84"
+    private let versionCode = "1079242191"
+    private let bloksVersion = "799db3e387d7a21a19c72918b8698b6cd28a1516ade363792c100ed45a0f9f0b"
+    private let appID = "567067343352427"
+
+    private var userAgent: String {
+        "Instagram \(appVersion) Android (34/14; 480dpi; 1344x2992; Google/google; Pixel 8 Pro; husky; husky; es_CL; \(versionCode))"
     }
 
     private let session: URLSession = {
@@ -45,7 +50,7 @@ final class InstagramAPI {
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForRequest = 25
         return URLSession(configuration: config)
     }()
 
@@ -55,191 +60,272 @@ final class InstagramAPI {
         return decoder
     }()
 
-    /// Identificador fijo de este teléfono para la API de la app.
-    private let deviceID: String = {
-        if let saved = UserDefaults.standard.string(forKey: "deviceID") { return saved }
-        let new = UUID().uuidString
-        UserDefaults.standard.set(new, forKey: "deviceID")
-        return new
-    }()
+    func viewerID() async -> String? { auth.userID }
 
-    @MainActor
-    func cookies() async -> [HTTPCookie] {
-        await withCheckedContinuation { continuation in
-            SharedWeb.dataStore.httpCookieStore.getAllCookies { all in
-                continuation.resume(returning: all.filter { $0.domain.hasSuffix("instagram.com") })
+    // MARK: Petición base
+
+    private struct Raw {
+        let code: Int
+        let data: Data
+        let json: [String: Any]
+        let headers: [AnyHashable: Any]
+        var status: String { json["status"] as? String ?? "" }
+        var message: String { json["message"] as? String ?? "" }
+        func header(_ name: String) -> String? {
+            headers.first { ($0.key as? String)?.lowercased() == name.lowercased() }?.value as? String
+        }
+    }
+
+    /// `path` relativo a /api/v1/ o dirección completa. `form` != nil hace un POST;
+    /// `signed` lo manda como signed_body, igual que la app oficial.
+    private func raw(_ path: String, query: [String: String] = [:],
+                     form: [String: String]? = nil, signed: Bool = true,
+                     authed: Bool = true) async throws -> Raw {
+        var components = URLComponents(string: path.hasPrefix("https://") ? path : "https://i.instagram.com/api/v1/" + path)!
+        if !query.isEmpty { components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) } }
+        var request = URLRequest(url: components.url!)
+
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(appID, forHTTPHeaderField: "X-IG-App-ID")
+        request.setValue(bloksVersion, forHTTPHeaderField: "X-Bloks-Version-Id")
+        request.setValue("3brTv10=", forHTTPHeaderField: "X-IG-Capabilities")
+        request.setValue("WIFI", forHTTPHeaderField: "X-IG-Connection-Type")
+        request.setValue("es_CL", forHTTPHeaderField: "X-IG-App-Locale")
+        request.setValue("es_CL", forHTTPHeaderField: "X-IG-Device-Locale")
+        request.setValue("CL", forHTTPHeaderField: "X-IG-App-Startup-Country")
+        request.setValue(auth.uuid, forHTTPHeaderField: "X-IG-Device-ID")
+        request.setValue(auth.phoneID, forHTTPHeaderField: "X-IG-Family-Device-ID")
+        request.setValue(auth.androidID, forHTTPHeaderField: "X-IG-Android-ID")
+        request.setValue(String(TimeZone.current.secondsFromGMT()), forHTTPHeaderField: "X-IG-Timezone-Offset")
+        request.setValue(auth.pigeonSession, forHTTPHeaderField: "X-Pigeon-Session-Id")
+        request.setValue("0", forHTTPHeaderField: "X-IG-WWW-Claim")
+        request.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let mid = auth.mid { request.setValue(mid, forHTTPHeaderField: "X-MID") }
+        if authed, let authorization = auth.authorization {
+            request.setValue(authorization, forHTTPHeaderField: "Authorization")
+            if let id = auth.userID {
+                request.setValue(id, forHTTPHeaderField: "IG-U-DS-USER-ID")
+                request.setValue(id, forHTTPHeaderField: "IG-INTENDED-USER-ID")
             }
         }
-    }
 
-    /// Tu id de usuario, guardado por Instagram en la cookie ds_user_id.
-    func viewerID() async -> String? {
-        await cookies().first { $0.name == "ds_user_id" }?.value
-    }
-
-    // MARK: Peticiones
-
-    /// `path` puede ser relativo a /api/v1/ o una dirección completa.
-    func get<T: Decodable>(_ path: String, _ query: [String: String] = [:], host: Host) async throws -> T {
-        var components = URLComponents(string: path.hasPrefix("https://") ? path : host.base + path)!
-        if !query.isEmpty { components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) } }
-        return try await send(URLRequest(url: components.url!), host: host)
-    }
-
-    func post<T: Decodable>(_ path: String, form: [String: String], host: Host) async throws -> T {
-        var request = URLRequest(url: URL(string: host.base + path)!)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        request.httpBody = form.map { key, value in
-            "\(key)=\(value.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")"
-        }.joined(separator: "&").data(using: .utf8)
-        return try await send(request, host: host)
-    }
-
-    /// Prueba cada forma en orden y devuelve la primera que funcione.
-    func firstOf<T>(_ attempts: [() async throws -> T]) async throws -> T {
-        var lastError: Error = APIError.message("Sin intentos")
-        for attempt in attempts {
-            do { return try await attempt() } catch APIError.loggedOut { throw APIError.loggedOut } catch { lastError = error }
-        }
-        throw lastError
-    }
-
-    private func send<T: Decodable>(_ original: URLRequest, host: Host) async throws -> T {
-        var request = original
-        let jar = await cookies()
-        guard jar.contains(where: { $0.name == "sessionid" }) else {
-            await signalLoggedOut()
-            throw APIError.loggedOut
-        }
-        for (field, value) in HTTPCookie.requestHeaderFields(with: jar) {
-            request.setValue(value, forHTTPHeaderField: field)
-        }
-        request.setValue(jar.first { $0.name == "csrftoken" }?.value ?? "", forHTTPHeaderField: "X-CSRFToken")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if host == .app {
-            // Se presenta como la app de Instagram para iPhone (cabeceras como las de Instaloader).
-            let os = UIDevice.current.systemVersion.replacingOccurrences(of: ".", with: "_")
-            request.setValue("Instagram 309.1.0.41.113 (iPhone14,5; iOS \(os); es_CL; es-CL; scale=3.00; 1170x2532; 541635890) AppleWebKit/420+",
-                             forHTTPHeaderField: "User-Agent")
-            request.setValue("124024574287414", forHTTPHeaderField: "X-IG-App-ID")
-            request.setValue("36r/F/8=", forHTTPHeaderField: "X-IG-Capabilities")
-            request.setValue("WiFi", forHTTPHeaderField: "X-IG-Connection-Type")
-            request.setValue("es-CL", forHTTPHeaderField: "X-IG-App-Locale")
-            request.setValue(deviceID, forHTTPHeaderField: "X-IG-Device-ID")
-            request.setValue(String(TimeZone.current.secondsFromGMT()), forHTTPHeaderField: "X-IG-Timezone-Offset")
-        } else {
-            request.setValue("936619743392459", forHTTPHeaderField: "X-IG-App-ID")
-            request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
-            request.setValue(SharedWeb.userAgent, forHTTPHeaderField: "User-Agent")
-            request.setValue("https://www.instagram.com/", forHTTPHeaderField: "Referer")
-            request.setValue("https://www.instagram.com", forHTTPHeaderField: "Origin")
+        if let form = form {
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Self.encodeForm(form, signed: signed)
         }
 
-        let label = "\(request.httpMethod ?? "GET") [\(host.rawValue)] \(request.url?.path ?? "")"
-        let result: (Data, URLResponse)
+        let label = "\(request.httpMethod ?? "GET") \(components.path)"
+        let data: Data, response: URLResponse
         do {
-            result = try await session.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch {
-            await record("\(label) → sin conexión: \(error.localizedDescription)")
+            await record("\(label) → sin conexión")
             throw error
         }
-        let (data, response) = result
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        let keys = json.map { $0.keys.sorted().prefix(8).joined(separator: ", ") } ?? "no es JSON"
-        let message = (json?["message"] as? String) ?? ""
+        let http = response as? HTTPURLResponse
+        let code = http?.statusCode ?? 0
+        let json = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
+        let result = Raw(code: code, data: data, json: json, headers: http?.allHeaderFields ?? [:])
 
-        if code == 401 || json?["require_login"] as? Bool == true || message == "login_required" {
-            await record("\(label) → \(code) sesión rechazada")
+        if let mid = result.header("ig-set-x-mid") { auth.mid = mid }
+        if result.message == "login_required" || result.json["require_login"] as? Bool == true {
+            await record("\(label) → sesión rechazada")
             await signalLoggedOut()
             throw APIError.loggedOut
         }
-        guard (200..<300).contains(code) else {
-            await record("\(label) → \(code) \(message.isEmpty ? keys : message)")
-            if !message.isEmpty { throw APIError.message("\(message) (\(code))") }
-            throw APIError.http(code, request.url?.path ?? "")
+        return result
+    }
+
+    private static func encodeForm(_ form: [String: String], signed: Bool) -> Data {
+        func encode(_ pairs: [String: String]) -> String {
+            var allowed = CharacterSet.alphanumerics
+            allowed.insert(charactersIn: "-._~")
+            return pairs.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")" }
+                .joined(separator: "&")
+        }
+        if signed {
+            let json = (try? JSONSerialization.data(withJSONObject: form)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            // La app oficial firma el cuerpo; hoy basta el prefijo "SIGNATURE." sin firma.
+            return encode(["signed_body": "SIGNATURE.\(json)"]).data(using: .utf8) ?? Data()
+        }
+        return encode(form).data(using: .utf8) ?? Data()
+    }
+
+    private func get<T: Decodable>(_ path: String, _ query: [String: String] = [:]) async throws -> T {
+        let result = try await raw(path, query: query)
+        return try decode(T.self, from: result, label: "GET " + shortPath(path))
+    }
+
+    /// Decodifica, y si el formato cambió deja el motivo en el registro.
+    private func decode<T: Decodable>(_ type: T.Type, from result: Raw, label: String) throws -> T {
+        guard (200..<300).contains(result.code) else {
+            await record("\(label) → \(result.code) \(result.message.isEmpty ? fields(result.json) : result.message)")
+            throw APIError.message(result.message.isEmpty ? "Instagram respondió con un error (\(result.code))." : result.message)
         }
         do {
-            let value = try decoder.decode(T.self, from: data)
-            await record("\(label) → \(code) ok · \(keys)")
+            let value = try decoder.decode(T.self, from: result.data)
+            await record("\(label) → ok · \(fields(result.json))")
             return value
         } catch let error as DecodingError {
-            let detail = Self.describe(error)
-            await record("\(label) → \(code) formato distinto: \(detail) · campos: \(keys)")
-            throw APIError.message("Instagram respondió en un formato distinto (\(detail)).")
+            await record("\(label) → formato distinto: \(Self.describe(error))")
+            throw APIError.message("Instagram respondió en un formato distinto (\(Self.describe(error))).")
         }
     }
 
-    private static func describe(_ error: DecodingError) -> String {
-        func path(_ context: DecodingError.Context) -> String {
-            context.codingPath.map(\.stringValue).joined(separator: ".")
+    private func fields(_ json: [String: Any]) -> String { json.keys.sorted().prefix(8).joined(separator: ", ") }
+    private func shortPath(_ path: String) -> String { path.hasPrefix("https://") ? (URL(string: path)?.path ?? path) : path }
+    private func record(_ line: String) async { await MainActor.run { appendLog(line) } }
+    @MainActor private func appendLog(_ line: String) { log.append(line); if log.count > 80 { log.removeFirst(log.count - 80) } }
+    @MainActor private func signalLoggedOut() { onLoggedOut?() }
+
+    // MARK: Inicio de sesión
+
+    /// Paso 1: usuario y contraseña. Devuelve qué falta (2FA, código, o listo).
+    func logIn(username: String, password: String) async throws -> LoginStep {
+        _ = try? await raw("accounts/contact_point_prefill/", form: ["phone_id": auth.phoneID, "usage": "prefill"], signed: false, authed: false)
+        let (keyID, publicKey) = try await encryptionKey()
+        let encrypted = try PasswordCrypto.encrypt(password, keyID: keyID, publicKeyBase64: publicKey)
+        let form = [
+            "jazoest": jazoest(auth.phoneID),
+            "country_codes": "[{\"country_code\":\"56\",\"source\":[\"default\"]}]",
+            "phone_id": auth.phoneID,
+            "enc_password": encrypted,
+            "username": username,
+            "adid": auth.adID,
+            "guid": auth.uuid,
+            "device_id": auth.androidID,
+            "google_tokens": "[]",
+            "login_attempt_count": "0"
+        ]
+        auth.username = username
+        let result = try await raw("accounts/login/", form: form, authed: false)
+        return try await finishLogin(result)
+    }
+
+    /// Paso 2a: el código de la app de autenticación o del SMS.
+    func submitTwoFactor(code: String, identifier: String, username: String) async throws -> LoginStep {
+        let form = [
+            "verification_code": code.trimmingCharacters(in: .whitespaces),
+            "phone_id": auth.phoneID,
+            "two_factor_identifier": identifier,
+            "username": username,
+            "trust_this_device": "1",
+            "guid": auth.uuid,
+            "device_id": auth.androidID,
+            "waterfall_id": UUID().uuidString,
+            "verification_method": "3"
+        ]
+        let result = try await raw("accounts/two_factor_login/", form: form, authed: false)
+        return try await finishLogin(result)
+    }
+
+    /// Paso 2b: pide a Instagram que envíe el código por correo.
+    func requestEmailCode(challengePath: String) async throws {
+        let path = challengePath.hasPrefix("/") ? String(challengePath.dropFirst()) : challengePath
+        _ = try? await raw(path, query: ["guid": auth.uuid, "device_id": auth.androidID], authed: false)
+        _ = try await raw(path, form: ["choice": "1", "guid": auth.uuid, "device_id": auth.androidID], signed: false, authed: false)
+    }
+
+    /// Paso 2b (cont.): el código que llegó por correo.
+    func submitEmailCode(_ code: String, challengePath: String) async throws -> LoginStep {
+        let path = challengePath.hasPrefix("/") ? String(challengePath.dropFirst()) : challengePath
+        let form = ["security_code": code.trimmingCharacters(in: .whitespaces),
+                    "guid": auth.uuid, "device_id": auth.androidID]
+        let result = try await raw(path, form: form, signed: false, authed: false)
+        return try await finishLogin(result)
+    }
+
+    /// Guarda el permiso cuando el inicio de sesión queda completo.
+    private func finishLogin(_ result: Raw) async throws -> LoginStep {
+        if let authorization = result.header("ig-set-authorization"), !authorization.isEmpty {
+            auth.authorization = authorization.hasPrefix("Bearer") ? authorization : "Bearer \(authorization)"
         }
+        if result.status == "ok", let user = result.json["logged_in_user"] as? [String: Any] {
+            auth.userID = idString(user["pk"])
+            if let name = user["username"] as? String { auth.username = name }
+            await record("login → ok como \(auth.username ?? "?")")
+            return .done
+        }
+        if result.json["two_factor_required"] as? Bool == true,
+           let info = result.json["two_factor_info"] as? [String: Any],
+           let identifier = info["two_factor_identifier"] as? String {
+            let hint = (info["obfuscated_phone_number"] as? String).map { "Código enviado a \($0)" } ?? "Escribe el código de verificación"
+            return .twoFactor(identifier: identifier, hint: hint)
+        }
+        if let challenge = result.json["challenge"] as? [String: Any], let path = challenge["api_path"] as? String {
+            return .checkpoint(path: path, hint: "Instagram necesita verificar que eres tú.")
+        }
+        let message = result.message.isEmpty ? "No se pudo iniciar sesión. Revisa tu usuario y contraseña." : result.message
+        throw APIError.message(message)
+    }
+
+    /// Pide la clave pública con la que se cifra la contraseña (viene en las cabeceras).
+    private func encryptionKey() async throws -> (Int, String) {
+        let result = try await raw("launcher/sync/",
+                                   form: ["id": auth.uuid, "server_config_retrieval": "1"], authed: false)
+        guard let idText = result.header("ig-set-password-encryption-key-id"), let id = Int(idText),
+              let key = result.header("ig-set-password-encryption-pub-key") else {
+            throw APIError.message("Instagram no entregó la clave de cifrado. Intenta de nuevo.")
+        }
+        return (id, key)
+    }
+
+    private func jazoest(_ symbols: String) -> String { "2\(symbols.unicodeScalars.reduce(0) { $0 + Int($1.value) })" }
+    private func idString(_ value: Any?) -> String? {
+        if let text = value as? String { return text }
+        if let number = value as? NSNumber { return number.stringValue }
+        return nil
+    }
+
+    func logOut() { auth.clear() }
+
+    private static func describe(_ error: DecodingError) -> String {
+        func path(_ c: DecodingError.Context) -> String { c.codingPath.map(\.stringValue).joined(separator: ".") }
         switch error {
-        case .keyNotFound(let key, let context): return "falta «\(key.stringValue)» en \(path(context))"
-        case .typeMismatch(_, let context): return "tipo distinto en \(path(context))"
-        case .valueNotFound(_, let context): return "valor vacío en \(path(context))"
-        case .dataCorrupted(let context): return "datos dañados en \(path(context))"
+        case .keyNotFound(let key, let c): return "falta «\(key.stringValue)» en \(path(c))"
+        case .typeMismatch(_, let c): return "tipo distinto en \(path(c))"
+        case .valueNotFound(_, let c): return "valor vacío en \(path(c))"
+        case .dataCorrupted(let c): return "datos dañados en \(path(c))"
         @unknown default: return "error de formato"
         }
     }
 
-    @MainActor private func record(_ line: String) {
-        log.append(line)
-        if log.count > 60 { log.removeFirst(log.count - 60) }
-    }
-
-    @MainActor private func signalLoggedOut() { onLoggedOut?() }
-
     // MARK: Historias
 
     func storiesTray() async throws -> [TrayReel] {
-        let tray: ReelsTray = try await firstOf([
-            { try await self.get("feed/reels_tray/", host: .web) },
-            { try await self.get("feed/reels_tray/", host: .app) }
-        ])
+        let form = ["supported_capabilities_new": "[]", "reason": "cold_start",
+                    "timezone_offset": String(TimeZone.current.secondsFromGMT()),
+                    "page_size": "50", "_uuid": auth.uuid]
+        let result = try await raw("feed/reels_tray/", form: form)
+        let tray = try decode(ReelsTray.self, from: result, label: "GET feed/reels_tray/")
         return tray.tray
     }
 
     func storyItems(reelID: String) async throws -> [IGMedia] {
-        try await firstOf([
-            { try await self.reelsMedia(reelID, host: .web) },
-            { try await self.reelsMedia(reelID, host: .app) },
-            {
-                let story: UserStory = try await self.get("feed/user/\(reelID)/story/", host: .app)
-                guard let items = story.reel?.items, !items.isEmpty else { throw APIError.message("Sin historias") }
-                return items
-            }
-        ])
-    }
-
-    private func reelsMedia(_ reelID: String, host: Host) async throws -> [IGMedia] {
-        let response: ReelsMedia = try await get("feed/reels_media/", ["reel_ids": reelID], host: host)
+        let story: UserStory = try await get("feed/user/\(reelID)/story/")
+        if let items = story.reel?.items, !items.isEmpty { return items }
+        let response: ReelsMedia = try await get("feed/reels_media/", ["reel_ids": reelID])
         let items = response.reels?[reelID]?.value?.items ?? response.reelsMedia?.first?.value?.items ?? []
-        if items.isEmpty { throw APIError.message("La historia llegó vacía") }
+        if items.isEmpty { throw APIError.message("La historia llegó vacía.") }
         return items
     }
 
-    /// Marca la historia como vista (así apareces en la lista de quien la subió).
     func markSeen(_ item: IGMedia, ownerID: String) async {
         guard let taken = item.takenAt else { return }
-        let _: StatusResponse? = try? await post("stories/reel/seen", form: [
-            "reelMediaId": item.mediaPK,
-            "reelMediaOwnerId": ownerID,
-            "reelId": ownerID,
-            "reelMediaTakenAt": String(taken),
-            "viewSeenAt": String(Int(Date().timeIntervalSince1970))
-        ], host: .web)
+        _ = try? await raw("story/reel/seen", form: [
+            "container_module": "feed_timeline",
+            "live_vods": "[]",
+            "reel_media_skipped": "[]",
+            "reels": "{\"\(ownerID)_\(ownerID)\":[\"\(item.mediaPK)_\(ownerID)|\(taken)\"]}",
+            "reel_media_viewed": String(Int(Date().timeIntervalSince1970)),
+            "_uuid": auth.uuid
+        ])
     }
 
-    /// Quién vio una historia tuya (y a quién le gustó).
     func storyViewers(mediaID: String) async throws -> ViewersResponse {
-        try await firstOf([
-            { try await self.get("media/\(mediaID)/list_reel_media_viewer/", host: .app) },
-            { try await self.get("media/\(mediaID)/list_reel_media_viewer/", host: .iweb) }
-        ])
+        try await get("media/\(mediaID)/list_reel_media_viewer/")
     }
 
     // MARK: Feed (sin Reels)
@@ -248,602 +334,103 @@ final class InstagramAPI {
         var form = [
             "reason": maxID == nil ? "cold_start_fetch" : "pagination",
             "is_pull_to_refresh": "0",
-            "is_prefetch": "0",
             "feed_view_info": "[]",
-            "_uuid": deviceID,
-            "device_id": deviceID,
-            "phone_id": deviceID,
-            "timezone_offset": String(TimeZone.current.secondsFromGMT())
+            "timezone_offset": String(TimeZone.current.secondsFromGMT()),
+            "_uuid": auth.uuid
         ]
         if let maxID = maxID { form["max_id"] = maxID }
-        return try await firstOf([
-            { try await self.post("feed/timeline/", form: form, host: .app) },
-            { try await self.post("feed/timeline/", form: form, host: .iweb) }
-        ])
+        let result = try await raw("feed/timeline/", form: form)
+        return try decode(FeedPage.self, from: result, label: "GET feed/timeline/")
     }
 
     func like(_ media: IGMedia, _ liked: Bool) async throws {
-        let _: StatusResponse = try await post("web/likes/\(media.mediaPK)/\(liked ? "like" : "unlike")/", form: [:], host: .web)
+        _ = try await raw("media/\(media.mediaPK)/\(liked ? "like" : "unlike")/",
+                         form: ["media_id": media.mediaPK, "_uuid": auth.uuid])
     }
 
     func comments(mediaPK: String) async throws -> [IGComment] {
-        let result: CommentsResponse = try await firstOf([
-            { try await self.get("media/\(mediaPK)/comments/", ["can_support_threading": "true"], host: .app) },
-            { try await self.get("media/\(mediaPK)/comments/", ["can_support_threading": "true"], host: .web) }
-        ])
+        let result: CommentsResponse = try await get("media/\(mediaPK)/comments/", ["can_support_threading": "true"])
         return result.comments?.compactMap(\.value) ?? []
     }
 
     func addComment(_ text: String, mediaPK: String) async throws {
-        let _: StatusResponse = try await post("web/comments/\(mediaPK)/add/", form: ["comment_text": text], host: .web)
+        _ = try await raw("media/\(mediaPK)/comment/", form: ["comment_text": text, "_uuid": auth.uuid])
     }
 
     // MARK: Buscador
 
-    /// Cuentas que se parecen a lo escrito, en el orden de Instagram (las más relevantes primero).
     func search(_ query: String) async throws -> [IGUser] {
-        try await firstOf([
-            {
-                let r: TopSearch = try await self.get("https://www.instagram.com/web/search/topsearch/",
-                                                      ["query": query, "context": "blended"], host: .web)
-                return r.users?.compactMap { $0.value?.user } ?? []
-            },
-            {
-                let r: TopSearch = try await self.get("web/search/topsearch/", ["query": query], host: .web)
-                return r.users?.compactMap { $0.value?.user } ?? []
-            },
-            {
-                let r: UserSearch = try await self.get("users/search/", ["q": query, "count": "30"], host: .app)
-                return r.users?.compactMap(\.value) ?? []
-            },
-            {
-                let r: FlatSearch = try await self.get("fbsearch/topsearch_flat/", ["query": query, "context": "user"], host: .app)
-                return r.list?.compactMap { $0.value?.user } ?? []
-            }
-        ])
+        let result: UserSearch = try await get("users/search/", ["q": query, "count": "30",
+                                                                 "timezone_offset": String(TimeZone.current.secondsFromGMT())])
+        return result.users?.compactMap(\.value) ?? []
     }
 
     // MARK: Perfiles
 
     func userInfo(id: String) async throws -> IGUser {
-        let info: UserInfo = try await firstOf([
-            { try await self.get("users/\(id)/info/", host: .app) },
-            { try await self.get("users/\(id)/info/", host: .iweb) }
-        ])
+        let info: UserInfo = try await get("users/\(id)/info/")
         guard let user = info.user else { throw APIError.message("Instagram no devolvió el perfil.") }
         return user
     }
 
     func userPosts(id: String) async throws -> [IGMedia] {
-        let page: UserFeed = try await firstOf([
-            { try await self.get("feed/user/\(id)/", ["count": "33"], host: .app) },
-            { try await self.get("feed/user/\(id)/", ["count": "33"], host: .iweb) }
-        ])
+        let page: UserFeed = try await get("feed/user/\(id)/", ["count": "33"])
         return page.items?.compactMap(\.value) ?? []
     }
 
-    /// Perfil completo. Primero por id (API de la app); si falla, por nombre (web).
     func profile(userID: String?, username: String?) async throws -> ProfileDisplay {
         var id = userID
-        if id == nil && username == nil { id = await viewerID() }
-        var firstError: Error?
-        if let id = id {
-            do {
-                let user = try await userInfo(id: id)
-                let posts = (try? await userPosts(id: id)) ?? []
-                return ProfileDisplay(user: user, posts: posts)
-            } catch APIError.loggedOut {
-                throw APIError.loggedOut
-            } catch {
-                firstError = error
-            }
+        if id == nil, username == nil { id = auth.userID }
+        if id == nil, let name = username {
+            id = try? await search(name).first { $0.username.lowercased() == name.lowercased() }?.id
         }
-        guard let name = username else { throw firstError ?? APIError.loggedOut }
-        let web: WebProfile = try await get("users/web_profile_info/", ["username": name], host: .web)
-        guard let user = web.data?.user else { throw firstError ?? APIError.message("Perfil no disponible.") }
-        return ProfileDisplay(web: user)
+        guard let id = id else { throw APIError.message("No se encontró el perfil.") }
+        let user = try await userInfo(id: id)
+        let posts = (try? await userPosts(id: id)) ?? []
+        return ProfileDisplay(user: user, posts: posts)
     }
 
     // MARK: Mensajes
 
     func inbox(cursor: String?) async throws -> InboxResponse.Box {
-        var query = ["persistentBadging": "true", "limit": "20", "thread_message_limit": "10"]
+        var query = ["visual_message_return_type": "unseen", "persistentBadging": "true",
+                     "limit": "20", "thread_message_limit": "10"]
         if let cursor = cursor { query["cursor"] = cursor }
-        let result: InboxResponse = try await firstOf([
-            { try await self.get("direct_v2/inbox/", query, host: .app) },
-            { try await self.get("direct_v2/inbox/", query, host: .iweb) },
-            { try await self.get("direct_v2/inbox/", query, host: .web) }
-        ])
+        let result: InboxResponse = try await get("direct_v2/inbox/", query)
         guard let box = result.inbox else { throw APIError.message("Instagram no devolvió la bandeja.") }
         return box
     }
 
     func thread(id: String, cursor: String? = nil) async throws -> DMThread {
-        var query = ["limit": "50"]
+        var query = ["limit": "50", "visual_message_return_type": "unseen"]
         if let cursor = cursor { query["cursor"] = cursor }
-        let result: ThreadResponse = try await firstOf([
-            { try await self.get("direct_v2/threads/\(id)/", query, host: .app) },
-            { try await self.get("direct_v2/threads/\(id)/", query, host: .iweb) }
-        ])
+        let result: ThreadResponse = try await get("direct_v2/threads/\(id)/", query)
         guard let thread = result.thread else { throw APIError.message("Instagram no devolvió el chat.") }
         return thread
     }
 
     func send(text: String, threadID: String) async throws {
-        let token = UUID().uuidString
-        let form = [
+        let token = String(Int(Date().timeIntervalSince1970 * 1000)) + String(Int.random(in: 100...999))
+        _ = try await raw("direct_v2/threads/broadcast/text/", form: [
             "action": "send_item",
             "thread_ids": "[\(threadID)]",
             "client_context": token,
             "mutation_token": token,
-            "_uuid": deviceID,
+            "_uuid": auth.uuid,
+            "device_id": auth.androidID,
             "text": text
-        ]
-        let _: StatusResponse = try await firstOf([
-            { try await self.post("direct_v2/threads/broadcast/text/", form: form, host: .app) },
-            { try await self.post("direct_v2/threads/broadcast/text/", form: form, host: .iweb) }
-        ])
+        ], signed: false)
     }
 
-    /// Prueba cada parte de la app y deja el resultado en el registro.
     func runDiagnostics() async {
-        let me = await viewerID()
-        await record("— Diagnóstico · sesión \(me == nil ? "sin id" : "con id") —")
+        await record("— Diagnóstico · sesión \(auth.isLoggedIn ? "activa como \(auth.username ?? "?")" : "cerrada") —")
         _ = try? await storiesTray()
         _ = try? await timeline(maxID: nil)
         _ = try? await search("a")
         _ = try? await inbox(cursor: nil)
-        if let me = me {
+        if let me = auth.userID {
             _ = try? await userInfo(id: me)
             _ = try? await userPosts(id: me)
-        }
-    }
-}
-
-// MARK: - Modelos
-// Todo es tolerante: si Instagram omite o cambia un campo, se ignora ese dato
-// en vez de romper la pantalla completa.
-
-/// Decodifica un elemento y, si falla, lo deja en nil en vez de romper la lista.
-struct Safe<T: Decodable>: Decodable {
-    let value: T?
-    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
-}
-
-extension KeyedDecodingContainer {
-    func soft<T: Decodable>(_ key: Key) -> T? { (try? decodeIfPresent(T.self, forKey: key)) ?? nil }
-    func softList<T: Decodable>(_ key: Key) -> [T]? { (soft(key) as [Safe<T>]?)?.compactMap(\.value) }
-}
-
-/// Ids que Instagram manda a veces como número y a veces como texto.
-struct Flex: Decodable, Hashable {
-    let value: String
-    init(_ value: String) { self.value = value }
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let text = try? container.decode(String.self) { value = text }
-        else if let number = try? container.decode(Int64.self) { value = String(number) }
-        else { value = String(try container.decode(Double.self)) }
-    }
-    var number: Double { Double(value) ?? 0 }
-}
-
-struct StatusResponse: Decodable { let status: String? }
-
-struct Candidate: Decodable { let url: URL; let width: Int?; let height: Int? }
-struct ImageVersions: Decodable { let candidates: [Safe<Candidate>]?
-    var first: URL? { candidates?.compactMap(\.value).first?.url }
-}
-
-struct IGUser: Decodable, Identifiable, Hashable {
-    let pk: Flex
-    let username: String
-    let fullName: String?
-    let profilePicUrl: URL?
-    let isVerified: Bool?
-    let isPrivate: Bool?
-    let biography: String?
-    let followerCount: Int?
-    let followingCount: Int?
-    let mediaCount: Int?
-    let hdProfilePicUrlInfo: Candidate?
-    var id: String { pk.value }
-
-    enum CodingKeys: String, CodingKey {
-        case pk, id, username, fullName, profilePicUrl, isVerified, isPrivate, biography
-        case followerCount, followingCount, mediaCount, hdProfilePicUrlInfo
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        pk = c.soft(.pk) ?? c.soft(.id) ?? Flex("0")
-        username = c.soft(.username) ?? ""
-        fullName = c.soft(.fullName)
-        profilePicUrl = c.soft(.profilePicUrl)
-        isVerified = c.soft(.isVerified)
-        isPrivate = c.soft(.isPrivate)
-        biography = c.soft(.biography)
-        followerCount = c.soft(.followerCount)
-        followingCount = c.soft(.followingCount)
-        mediaCount = c.soft(.mediaCount)
-        hdProfilePicUrlInfo = c.soft(.hdProfilePicUrlInfo)
-    }
-
-    static func == (a: IGUser, b: IGUser) -> Bool { a.pk == b.pk }
-    func hash(into hasher: inout Hasher) { hasher.combine(pk) }
-}
-
-struct IGMedia: Decodable, Identifiable {
-    let id: Flex
-    let pk: Flex?
-    let mediaType: Int?
-    let productType: String?
-    let imageVersions2: ImageVersions?
-    let videoVersions: [Candidate]?
-    let videoDuration: Double?
-    let takenAt: Int?
-    let carouselMedia: [IGMedia]?
-    let originalWidth: Int?
-    let originalHeight: Int?
-    let user: IGUser?
-    let caption: Caption?
-    let likeCount: Int?
-    let commentCount: Int?
-    let hasLiked: Bool?
-    let isAd: Bool
-    let song: String?
-
-    struct Caption: Decodable { let text: String? }
-    /// Sticker de música de una historia: título y artista de la canción.
-    struct MusicSticker: Decodable {
-        struct Asset: Decodable { let title: String?; let displayArtist: String? }
-        let musicAssetInfo: Asset?
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, pk, mediaType, productType, imageVersions2, videoVersions, videoDuration, takenAt
-        case carouselMedia, originalWidth, originalHeight, user, caption, likeCount, commentCount
-        case hasLiked, injected, storyMusicStickers
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        let pk: Flex? = c.soft(.pk)
-        self.pk = pk
-        id = c.soft(.id) ?? pk ?? Flex(UUID().uuidString)
-        mediaType = c.soft(.mediaType)
-        productType = c.soft(.productType)
-        imageVersions2 = c.soft(.imageVersions2)
-        videoVersions = c.softList(.videoVersions)
-        videoDuration = c.soft(.videoDuration)
-        takenAt = c.soft(.takenAt)
-        carouselMedia = c.softList(.carouselMedia)
-        originalWidth = c.soft(.originalWidth)
-        originalHeight = c.soft(.originalHeight)
-        user = c.soft(.user)
-        caption = c.soft(.caption)
-        likeCount = c.soft(.likeCount)
-        commentCount = c.soft(.commentCount)
-        hasLiked = c.soft(.hasLiked)
-        isAd = c.contains(.injected)
-        let sticker = (c.softList(.storyMusicStickers) as [MusicSticker]?)?.first?.musicAssetInfo
-        if let title = sticker?.title, !title.isEmpty {
-            song = [title, sticker?.displayArtist].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-        } else {
-            song = nil
-        }
-    }
-
-    /// El número de la publicación, sin el "_usuario" que trae el id.
-    var mediaPK: String { pk?.value ?? id.value.components(separatedBy: "_").first ?? id.value }
-    var isVideo: Bool { mediaType == 2 || productType == "clips" || productType == "igtv" }
-    /// Fotos de la publicación; los videos de un carrusel se omiten.
-    var photos: [IGMedia] {
-        if let children = carouselMedia, !children.isEmpty { return children.filter { !$0.isVideo } }
-        return isVideo ? [] : [self]
-    }
-
-    var imageURL: URL? { imageVersions2?.first ?? carouselMedia?.first?.imageURL }
-    var videoURL: URL? { videoVersions?.first?.url }
-    var aspect: CGFloat {
-        guard let w = originalWidth, let h = originalHeight, w > 0, h > 0 else { return 9.0 / 16.0 }
-        return CGFloat(w) / CGFloat(h)
-    }
-}
-
-struct FeedPage: Decodable {
-    struct Entry: Decodable { let mediaOrAd: IGMedia? }
-    let feedItems: [Safe<Entry>]?
-    let nextMaxId: String?
-    let moreAvailable: Bool?
-
-    /// Solo publicaciones de fotos de quienes sigues: sin Reels, videos ni anuncios.
-    var posts: [IGMedia] {
-        (feedItems ?? []).compactMap { $0.value?.mediaOrAd }.filter { !$0.isAd && !$0.photos.isEmpty }
-    }
-}
-
-struct IGComment: Decodable, Identifiable {
-    let pk: Flex
-    let text: String?
-    let user: IGUser?
-    let createdAt: Double?
-    var id: String { pk.value }
-}
-
-struct CommentsResponse: Decodable { let comments: [Safe<IGComment>]? }
-
-struct ViewersResponse: Decodable {
-    struct Viewer: Decodable { let user: IGUser?; let hasLiked: Bool? }
-    let users: [Safe<IGUser>]?
-    let viewers: [Safe<Viewer>]?
-    let totalViewerCount: Int?
-    let userCount: Int?
-
-    struct Entry: Identifiable {
-        let user: IGUser
-        let liked: Bool
-        var id: String { user.id }
-    }
-
-    /// Instagram usa una de las dos formas según la versión.
-    var list: [Entry] {
-        let fromViewers = (viewers ?? []).compactMap(\.value).compactMap { v in
-            v.user.map { Entry(user: $0, liked: v.hasLiked == true) }
-        }
-        if !fromViewers.isEmpty { return fromViewers }
-        return (users ?? []).compactMap(\.value).map { Entry(user: $0, liked: false) }
-    }
-}
-
-struct ReelsTray: Decodable {
-    let trayItems: [Safe<TrayReel>]?
-    enum CodingKeys: String, CodingKey { case tray }
-    init(from decoder: Decoder) throws {
-        trayItems = try decoder.container(keyedBy: CodingKeys.self).soft(.tray)
-    }
-    var tray: [TrayReel] { (trayItems ?? []).compactMap(\.value).filter { !$0.user.username.isEmpty } }
-}
-
-/// Una fila de historias de un usuario ("reel" es el nombre interno de Instagram para historias).
-struct TrayReel: Decodable, Identifiable {
-    let id: Flex
-    let user: IGUser
-    let seen: Double?
-    let latestReelMedia: Double?
-    let items: [IGMedia]?
-
-    enum CodingKeys: String, CodingKey { case id, user, seen, latestReelMedia, items }
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        user = try c.decode(IGUser.self, forKey: .user)
-        id = c.soft(.id) ?? user.pk
-        seen = c.soft(.seen)
-        latestReelMedia = c.soft(.latestReelMedia)
-        items = c.softList(.items)
-    }
-
-    var hasUnseen: Bool { (seen ?? 0) < (latestReelMedia ?? 0) }
-}
-
-struct ReelsMedia: Decodable {
-    struct Reel: Decodable {
-        let items: [IGMedia]?
-        enum CodingKeys: String, CodingKey { case items }
-        init(from decoder: Decoder) throws { items = try decoder.container(keyedBy: CodingKeys.self).softList(.items) }
-    }
-    let reels: [String: Safe<Reel>]?
-    let reelsMedia: [Safe<Reel>]?
-}
-
-struct UserStory: Decodable { let reel: ReelsMedia.Reel? }
-
-struct TopSearch: Decodable {
-    struct Hit: Decodable { let user: IGUser }
-    let users: [Safe<Hit>]?
-}
-
-struct FlatSearch: Decodable {
-    struct Hit: Decodable { let user: IGUser? }
-    let list: [Safe<Hit>]?
-}
-
-struct UserSearch: Decodable { let users: [Safe<IGUser>]? }
-
-struct UserInfo: Decodable { let user: IGUser? }
-
-struct UserFeed: Decodable { let items: [Safe<IGMedia>]? }
-
-struct WebProfile: Decodable {
-    struct Payload: Decodable { let user: ProfileUser? }
-    let data: Payload?
-}
-
-/// Formato de perfil de la web (solo se usa como respaldo).
-struct ProfileUser: Decodable {
-    struct Count: Decodable { let count: Int? }
-    struct Timeline: Decodable { let count: Int?; let edges: [Safe<Edge>]? }
-    struct Edge: Decodable { let node: Node }
-    struct Children: Decodable { let edges: [Safe<Edge>]? }
-    struct Node: Decodable {
-        let displayUrl: URL?
-        let isVideo: Bool?
-        let edgeSidecarToChildren: Children?
-        var photos: [URL] {
-            let children = (edgeSidecarToChildren?.edges ?? []).compactMap { $0.value?.node }
-                .filter { $0.isVideo != true }.compactMap(\.displayUrl)
-            return children.isEmpty ? [displayUrl].compactMap { $0 } : children
-        }
-    }
-
-    let username: String?
-    let fullName: String?
-    let biography: String?
-    let profilePicUrlHd: URL?
-    let profilePicUrl: URL?
-    let isPrivate: Bool?
-    let edgeFollowedBy: Count?
-    let edgeFollow: Count?
-    let edgeOwnerToTimelineMedia: Timeline?
-}
-
-/// Lo que muestra la pantalla de perfil, venga de la app o de la web.
-struct ProfileDisplay {
-    struct Post: Identifiable {
-        let id = UUID()
-        let photos: [URL]
-    }
-
-    let username: String
-    let fullName: String?
-    let biography: String?
-    let picture: URL?
-    let posts: Int?
-    let followers: Int?
-    let following: Int?
-    let isPrivate: Bool
-    /// Solo fotos y carruseles: ningún video ni Reel.
-    let photoPosts: [Post]
-
-    init(user: IGUser, posts media: [IGMedia]) {
-        username = user.username
-        fullName = user.fullName
-        biography = user.biography
-        picture = user.hdProfilePicUrlInfo?.url ?? user.profilePicUrl
-        posts = user.mediaCount
-        followers = user.followerCount
-        following = user.followingCount
-        isPrivate = user.isPrivate == true
-        photoPosts = media.map { Post(photos: $0.photos.compactMap(\.imageURL)) }.filter { !$0.photos.isEmpty }
-    }
-
-    init(web: ProfileUser) {
-        username = web.username ?? ""
-        fullName = web.fullName
-        biography = web.biography
-        picture = web.profilePicUrlHd ?? web.profilePicUrl
-        posts = web.edgeOwnerToTimelineMedia?.count
-        followers = web.edgeFollowedBy?.count
-        following = web.edgeFollow?.count
-        isPrivate = web.isPrivate == true
-        photoPosts = (web.edgeOwnerToTimelineMedia?.edges ?? []).compactMap { $0.value?.node }
-            .filter { $0.isVideo != true }.map { Post(photos: $0.photos) }.filter { !$0.photos.isEmpty }
-    }
-}
-
-struct InboxResponse: Decodable {
-    struct Box: Decodable {
-        let threadList: [Safe<DMThread>]?
-        let oldestCursor: String?
-        let hasOlder: Bool?
-        enum CodingKeys: String, CodingKey { case threads, oldestCursor, hasOlder }
-        init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            threadList = c.soft(.threads)
-            oldestCursor = c.soft(.oldestCursor)
-            hasOlder = c.soft(.hasOlder)
-        }
-        var threads: [DMThread] { (threadList ?? []).compactMap(\.value) }
-    }
-    let inbox: Box?
-}
-
-struct ThreadResponse: Decodable { let thread: DMThread? }
-
-struct DMThread: Decodable, Identifiable {
-    let threadId: String
-    let threadTitle: String?
-    let users: [IGUser]
-    let items: [DMItem]
-    let isGroup: Bool?
-    let oldestCursor: String?
-    let hasOlder: Bool?
-    var id: String { threadId }
-
-    enum CodingKeys: String, CodingKey { case threadId, threadTitle, users, items, isGroup, oldestCursor, hasOlder }
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        threadId = try c.decode(Flex.self, forKey: .threadId).value
-        threadTitle = c.soft(.threadTitle)
-        users = c.softList(.users) ?? []
-        items = c.softList(.items) ?? []
-        isGroup = c.soft(.isGroup)
-        oldestCursor = c.soft(.oldestCursor)
-        hasOlder = c.soft(.hasOlder)
-    }
-
-    var title: String {
-        if let title = threadTitle, !title.isEmpty { return title }
-        let names = users.map(\.username).filter { !$0.isEmpty }
-        return names.isEmpty ? "Chat" : names.joined(separator: ", ")
-    }
-}
-
-struct DMItem: Decodable, Identifiable {
-    struct MediaWrap: Decodable { let media: IGMedia?; let text: String? }
-    struct ClipWrap: Decodable { let clip: IGMedia? }
-    struct LinkWrap: Decodable { let text: String? }
-    struct Animated: Decodable {
-        struct Images: Decodable { struct Size: Decodable { let url: URL? }; let fixedHeight: Size? }
-        let images: Images?
-    }
-    struct Voice: Decodable { struct Media: Decodable { struct Audio: Decodable { let audioSrc: URL?; let duration: Double? }; let audio: Audio? }; let media: Media? }
-
-    let itemId: String
-    let userId: Flex?
-    let timestamp: Flex?
-    let itemType: String?
-    let text: String?
-    let attachment: IGMedia?
-    let stickerURL: URL?
-    let voiceURL: URL?
-    let voiceDuration: Double?
-    let linkText: String?
-    let caption: String?
-    var id: String { itemId }
-
-    enum CodingKeys: String, CodingKey {
-        case itemId, userId, timestamp, itemType, text, clip, mediaShare, media, storyShare, reelShare
-        case visualMedia, link, animatedMedia, voiceMedia
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        itemId = (c.soft(.itemId) as Flex?)?.value ?? UUID().uuidString
-        userId = c.soft(.userId)
-        timestamp = c.soft(.timestamp)
-        itemType = c.soft(.itemType)
-        text = c.soft(.text)
-        let story: MediaWrap? = c.soft(.storyShare)
-        let reel: MediaWrap? = c.soft(.reelShare)
-        let visual: MediaWrap? = c.soft(.visualMedia)
-        attachment = (c.soft(.clip) as ClipWrap?)?.clip ?? c.soft(.mediaShare) ?? c.soft(.media)
-            ?? story?.media ?? reel?.media ?? visual?.media
-        caption = reel?.text ?? story?.text
-        stickerURL = (c.soft(.animatedMedia) as Animated?)?.images?.fixedHeight?.url
-        let voice: Voice? = c.soft(.voiceMedia)
-        voiceURL = voice?.media?.audio?.audioSrc
-        voiceDuration = voice?.media?.audio?.duration
-        linkText = (c.soft(.link) as LinkWrap?)?.text
-    }
-
-    var date: Date { Date(timeIntervalSince1970: (timestamp?.number ?? 0) / 1_000_000) }
-
-    /// Texto para la vista previa de la bandeja.
-    var preview: String {
-        if let text = text, !text.isEmpty { return text }
-        if let text = linkText, !text.isEmpty { return text }
-        switch itemType {
-        case "clip", "xma_clip": return "Te envió un reel"
-        case "media_share", "xma_media_share": return "Te envió una publicación"
-        case "story_share", "xma_story_share": return "Compartió una historia"
-        case "reel_share": return "Respondió a una historia"
-        case "media", "raven_media", "visual_media": return "Foto o video"
-        case "animated_media": return "Sticker"
-        case "voice_media": return "Mensaje de voz"
-        case "like": return "❤️"
-        case "action_log": return "Actividad"
-        default: return "Mensaje"
         }
     }
 }
