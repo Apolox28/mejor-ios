@@ -155,11 +155,11 @@ final class InstagramAPI {
 
     private func get<T: Decodable>(_ path: String, _ query: [String: String] = [:]) async throws -> T {
         let result = try await raw(path, query: query)
-        return try decode(T.self, from: result, label: "GET " + shortPath(path))
+        return try await decode(T.self, from: result, label: "GET " + shortPath(path))
     }
 
     /// Decodifica, y si el formato cambió deja el motivo en el registro.
-    private func decode<T: Decodable>(_ type: T.Type, from result: Raw, label: String) throws -> T {
+    private func decode<T: Decodable>(_ type: T.Type, from result: Raw, label: String) async throws -> T {
         guard (200..<300).contains(result.code) else {
             await record("\(label) → \(result.code) \(result.message.isEmpty ? fields(result.json) : result.message)")
             throw APIError.message(result.message.isEmpty ? "Instagram respondió con un error (\(result.code))." : result.message)
@@ -299,7 +299,7 @@ final class InstagramAPI {
                     "timezone_offset": String(TimeZone.current.secondsFromGMT()),
                     "page_size": "50", "_uuid": auth.uuid]
         let result = try await raw("feed/reels_tray/", form: form)
-        let tray = try decode(ReelsTray.self, from: result, label: "GET feed/reels_tray/")
+        let tray = try await decode(ReelsTray.self, from: result, label: "GET feed/reels_tray/")
         return tray.tray
     }
 
@@ -340,7 +340,7 @@ final class InstagramAPI {
         ]
         if let maxID = maxID { form["max_id"] = maxID }
         let result = try await raw("feed/timeline/", form: form)
-        return try decode(FeedPage.self, from: result, label: "GET feed/timeline/")
+        return try await decode(FeedPage.self, from: result, label: "GET feed/timeline/")
     }
 
     func like(_ media: IGMedia, _ liked: Bool) async throws {
