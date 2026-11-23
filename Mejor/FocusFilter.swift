@@ -88,21 +88,26 @@ enum FocusFilter {
     static let script = "(function(){ if (window.__merjoLoaded) return; window.__merjoLoaded = true;\n"
         + common
         + #"""
+      /* La sección (mensajes/stories/search/profile) se fija de inmediato, antes de
+         que la página pinte nada, para tapar el feed sin esperar al barrido. */
+      try { document.documentElement.setAttribute('data-sec', window.__merjoSection || ''); } catch (e) {}
+
       var CSS = [
-        /* Reels y Explorar fuera al instante, en toda la app (sin esperar al barrido) */
+        /* Reels y Explorar fuera al instante, en toda la app */
         'a[href="/reels/"], a[href^="/reels/"], a[href="/explore/"] { display: none !important; }',
         'a[href^="/reel/"] { display: none !important; }',
         /* Carteles de "abrir la app" y banners de descarga */
         'a[href*="apps.apple.com"], a[href*="itunes.apple.com"] { display: none !important; }',
-        /* Inicio: se ocultan las publicaciones; queda solo la fila de historias */
-        'html[data-mj="home"] main article { display: none !important; }',
-        'html[data-mj="home"] main [role="progressbar"] { display: none !important; }',
-        'html[data-mj="home"] main { min-height: 0 !important; }',
+        /* HISTORIAS: el feed NO se muestra nunca. Solo queda la fila de historias
+           (los posts del feed son <article>; las historias no). Tapamos todo el feed. */
+        'html[data-sec="stories"] main article { display: none !important; }',
+        'html[data-sec="stories"] main [role="feed"] { display: none !important; }',
+        'html[data-sec="stories"] main [role="progressbar"] { display: none !important; }',
         /* Búsqueda: sin cuadrícula de publicaciones sugeridas */
-        'html[data-mj="search"] main a[href^="/p/"] { display: none !important; }',
-        /* Historias: fondo negro de borde a borde */
+        'html[data-sec="search"] main a[href^="/p/"] { display: none !important; }',
+        /* Historias (visor): fondo negro de borde a borde */
         'html[data-mj="story"], html[data-mj="story"] body { background: #000 !important; }',
-        /* Transiciones suaves y sin resaltado gris al tocar */
+        /* Sin resaltado gris al tocar */
         '* { -webkit-tap-highlight-color: transparent; }'
       ].join('\n');
 
@@ -113,8 +118,15 @@ enum FocusFilter {
         s.textContent = CSS;
         (document.head || document.documentElement).appendChild(s);
       }
-      // Las reglas globales (Reels, Explorar) se aplican de inmediato, sin esperar.
+      // Las reglas globales se aplican de inmediato, sin esperar.
       addStyle();
+
+      /* Red extra: en Historias, cualquier <article> que aparezca luego se esconde. */
+      function hideFeed() {
+        if (window.__merjoSection !== 'stories') return;
+        var posts = document.querySelectorAll('main article');
+        for (var i = 0; i < posts.length; i++) hide(posts[i]);
+      }
 
       function kind(path) {
         if (path === '/' || path === '') return 'home';
@@ -202,6 +214,7 @@ enum FocusFilter {
         check();
         findMe();
         if (goToProfile()) return;
+        hideFeed();
         hideInstagramTabBar();
         hideAppBanners();
         dismissNags();

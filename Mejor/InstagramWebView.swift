@@ -77,15 +77,22 @@ struct WebScreen: View {
 
     var body: some View {
         ZStack {
-            Color(.systemBackground).ignoresSafeArea()
             InstagramWebView(startURL: startURL, section: section, resetToken: resetToken,
                              loadDelay: loadDelay, isLoading: $isLoading, onNavigate: onNavigate)
                 .opacity(isLoading ? 0 : 1)
             if isLoading {
-                ProgressView().scaleEffect(1.2)
+                // Carga con el faro, no una pantalla negra.
+                ZStack {
+                    Brand.background.ignoresSafeArea()
+                    VStack(spacing: 18) {
+                        LogoImage(size: 76)
+                        ProgressView().tint(Brand.accent)
+                    }
+                }
+                .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: isLoading)
+        .animation(.easeOut(duration: 0.25), value: isLoading)
     }
 }
 
