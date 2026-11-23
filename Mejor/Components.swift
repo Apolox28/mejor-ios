@@ -79,10 +79,11 @@ final class PlayerUIView: UIView {
     }
 }
 
-/// Mensaje de error con botón para reintentar.
+/// Mensaje de error con botón para reintentar y otro para ver el diagnóstico.
 struct ErrorBanner: View {
     let message: String
     let retry: () -> Void
+    @State private var showDiagnostics = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -95,9 +96,99 @@ struct ErrorBanner: View {
             Button("Reintentar", action: retry)
                 .buttonStyle(.borderedProminent)
                 .tint(Brand.accent)
+            Button("Ver diagnóstico") { showDiagnostics = true }
+                .font(.footnote)
+                .foregroundColor(.secondary)
         }
         .padding(32)
         .frame(maxWidth: .infinity)
+        .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
+    }
+}
+
+/// Muestra qué respondió Instagram a cada llamada (códigos y nombres de campos,
+/// nunca el contenido de tus mensajes). Se puede copiar para enviarlo.
+struct DiagnosticsView: View {
+    @State private var lines: [String] = []
+    @State private var running = false
+    @State private var copied = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    Button {
+                        Task {
+                            running = true
+                            await InstagramAPI.shared.runDiagnostics()
+                            lines = InstagramAPI.shared.log
+                            running = false
+                        }
+                    } label: {
+                        HStack {
+                            Label("Probar todo", systemImage: "stethoscope")
+                            if running { Spacer(); ProgressView() }
+                        }
+                    }
+                    .disabled(running)
+                    Button {
+                        UIPasteboard.general.string = lines.joined(separator: "\n")
+                        copied = true
+                    } label: {
+                        Label(copied ? "Copiado" : "Copiar resultado", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    }
+                    .disabled(lines.isEmpty)
+                } footer: {
+                    Text("Solo incluye qué respondió Instagram (códigos y nombres de campos), nunca el contenido de tus mensajes ni tu contraseña.")
+                }
+                Section("Registro") {
+                    if lines.isEmpty { Text("Toca «Probar todo».").foregroundColor(.secondary) }
+                    ForEach(Array(lines.enumerated().reversed()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(line.contains("ok") ? .primary : .red)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .navigationTitle("Diagnóstico")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cerrar") { dismiss() } } }
+        }
+        .onAppear { lines = InstagramAPI.shared.log }
+    }
+}
+
+/// Texto que se desliza en bucle cuando no cabe (canción de una historia).
+struct Marquee: View {
+    let text: String
+    @State private var textWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { geo in
+            let fits = textWidth <= geo.size.width
+            HStack(spacing: 40) {
+                Text(text).fixedSize()
+                    .background(GeometryReader { t in Color.clear.onAppear { textWidth = t.size.width } })
+                if !fits { Text(text).fixedSize() }
+            }
+            .offset(x: fits ? 0 : offset)
+            .onAppear { start(fits: fits) }
+            .onChange(of: textWidth) { _ in start(fits: textWidth <= geo.size.width) }
+        }
+        .frame(height: 16)
+        .clipped()
+        .accessibilityLabel(text)
+    }
+
+    private func start(fits: Bool) {
+        guard !fits, textWidth > 0 else { return }
+        offset = 0
+        withAnimation(.linear(duration: Double(textWidth + 40) / 30).repeatForever(autoreverses: false)) {
+            offset = -(textWidth + 40)
+        }
     }
 }
 

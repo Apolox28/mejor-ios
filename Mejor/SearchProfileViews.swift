@@ -2,19 +2,24 @@ import SwiftUI
 
 // MARK: - Buscador
 
+/// Los resultados aparecen mientras escribes, en el orden de Instagram
+/// (las cuentas más parecidas y relevantes primero).
 struct SearchView: View {
     @State private var query = ""
     @State private var results: [IGUser] = []
     @State private var error: String?
+    @State private var searching = false
+    @State private var retry = 0
 
     var body: some View {
         NavigationView {
             List {
                 if let error = error {
-                    Text(error).foregroundColor(.secondary)
+                    ErrorBanner(message: error) { retry += 1 }
+                        .listRowSeparator(.hidden)
                 }
                 ForEach(results) { user in
-                    NavigationLink(destination: ProfileView(username: user.username)) {
+                    NavigationLink(destination: ProfileView(userID: user.id, username: user.username)) {
                         UserRow(user: user)
                     }
                 }
@@ -22,8 +27,14 @@ struct SearchView: View {
             .listStyle(.plain)
             .overlay {
                 if query.isEmpty {
-                    Text("Busca personas por su nombre de usuario.")
+                    Text("Escribe un nombre: los resultados aparecen al instante.")
                         .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                } else if searching && results.isEmpty {
+                    ProgressView()
+                } else if !searching && results.isEmpty && error == nil {
+                    Text("Sin resultados para «\(query)».").foregroundColor(.secondary)
                 }
             }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
@@ -31,18 +42,22 @@ struct SearchView: View {
             .disableAutocorrection(true)
             .textInputAutocapitalization(.never)
             .navigationTitle("Buscar")
-            // Espera a que dejes de escribir antes de preguntar a Instagram.
-            .task(id: query) {
+            // Cada letra nueva cancela la búsqueda anterior y lanza otra tras una pausa corta.
+            .task(id: "\(query)|\(retry)") {
                 let text = query.trimmingCharacters(in: .whitespaces)
                 guard !text.isEmpty else { results = []; error = nil; return }
-                try? await Task.sleep(nanoseconds: 350_000_000)
+                searching = true
+                try? await Task.sleep(nanoseconds: 250_000_000)
                 guard !Task.isCancelled else { return }
                 do {
-                    results = try await InstagramAPI.shared.search(text)
+                    let found = try await InstagramAPI.shared.search(text)
+                    guard !Task.isCancelled else { return }
+                    results = found
                     error = nil
                 } catch {
                     if !Task.isCancelled { self.error = error.localizedDescription }
                 }
+                searching = false
             }
         }
         .navigationViewStyle(.stack)
@@ -72,22 +87,25 @@ struct UserRow: View {
 
 // MARK: - Perfil
 
-/// Tu perfil (username nil) o el de otra persona. Solo muestra fotos: los videos
-/// del perfil son Reels y se omiten.
+/// Tu perfil (sin parámetros) o el de otra persona. Solo muestra fotos y carruseles:
+/// los videos del perfil son Reels y se omiten.
 struct ProfileView: View {
-    var username: String?
+    var userID: String? = nil
+    var username: String? = nil
     @EnvironmentObject private var session: Session
-    @State private var profile: ProfileUser?
+    @State private var profile: ProfileDisplay?
     @State private var error: String?
-    @State private var opened: ProfileUser.Node?
+    @State private var opened: ProfileDisplay.Post?
+    @State private var showDiagnostics = false
 
     private let grid = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
+    private var isMine: Bool { userID == nil && username == nil }
 
     var body: some View {
         ScrollView {
             if let profile = profile {
                 header(profile)
-                if profile.isPrivate == true && profile.photoPosts.isEmpty {
+                if profile.isPrivate && profile.photoPosts.isEmpty {
                     Label("Esta cuenta es privada", systemImage: "lock")
                         .foregroundColor(.secondary)
                         .padding(.top, 40)
@@ -97,7 +115,7 @@ struct ProfileView: View {
                             Button { opened = post } label: {
                                 Color.clear
                                     .aspectRatio(1, contentMode: .fit)
-                                    .overlay(RemoteImage(url: post.thumbnailSrc ?? post.displayUrl))
+                                    .overlay(RemoteImage(url: post.photos.first))
                                     .clipped()
                                     .overlay(alignment: .topTrailing) {
                                         if post.photos.count > 1 {
@@ -123,10 +141,13 @@ struct ProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                if username == nil {
+                if isMine {
                     Menu {
                         Button { Task { await load() } } label: {
                             Label("Actualizar", systemImage: "arrow.clockwise")
+                        }
+                        Button { showDiagnostics = true } label: {
+                            Label("Diagnóstico", systemImage: "stethoscope")
                         }
                         Button(role: .destructive) { session.signOut() } label: {
                             Label("Cerrar sesión", systemImage: "rectangle.portrait.and.arrow.right")
@@ -137,16 +158,17 @@ struct ProfileView: View {
         }
         .task { if profile == nil { await load() } }
         .fullScreenCover(item: $opened) { post in PhotoViewer(photos: post.photos) }
+        .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
     }
 
-    private func header(_ p: ProfileUser) -> some View {
+    private func header(_ p: ProfileDisplay) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 20) {
-                Avatar(url: p.profilePicUrlHd ?? p.profilePicUrl, size: 88)
+                Avatar(url: p.picture, size: 88)
                 HStack {
-                    stat(p.edgeOwnerToTimelineMedia?.count, "publicaciones")
-                    stat(p.edgeFollowedBy?.count, "seguidores")
-                    stat(p.edgeFollow?.count, "seguidos")
+                    stat(p.posts, "publicaciones")
+                    stat(p.followers, "seguidores")
+                    stat(p.following, "seguidos")
                 }
             }
             if let name = p.fullName, !name.isEmpty {
@@ -171,12 +193,7 @@ struct ProfileView: View {
 
     private func load() async {
         do {
-            var name = username
-            if name == nil, let me = await InstagramAPI.shared.viewerID() {
-                name = try await InstagramAPI.shared.userInfo(id: me).username
-            }
-            guard let name = name else { throw APIError.loggedOut }
-            profile = try await InstagramAPI.shared.profile(username: name)
+            profile = try await InstagramAPI.shared.profile(userID: userID, username: username)
             error = nil
         } catch {
             self.error = error.localizedDescription

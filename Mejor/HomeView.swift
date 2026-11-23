@@ -12,7 +12,7 @@ struct HomeView: View {
     @State private var viewerID: String?
     @State private var viewer: ViewerStart?
     @State private var seen: Set<String> = []
-    @State private var openProfile: String?
+    @State private var openProfile: IGUser?
     @State private var commentsFor: IGMedia?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -49,7 +49,7 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .background(
                 NavigationLink(isActive: Binding(get: { openProfile != nil }, set: { if !$0 { openProfile = nil } })) {
-                    ProfileView(username: openProfile)
+                    ProfileView(userID: openProfile?.id, username: openProfile?.username)
                 } label: { EmptyView() }
                 .hidden()
             )
@@ -124,7 +124,7 @@ struct ViewerStart: Identifiable { let id: Int }
 
 struct PostCell: View {
     let post: IGMedia
-    let openProfile: (String) -> Void
+    let openProfile: (IGUser) -> Void
     let openComments: () -> Void
 
     @State private var liked: Bool
@@ -132,7 +132,7 @@ struct PostCell: View {
     @State private var page = 0
     @State private var burst = false
 
-    init(post: IGMedia, openProfile: @escaping (String) -> Void, openComments: @escaping () -> Void) {
+    init(post: IGMedia, openProfile: @escaping (IGUser) -> Void, openComments: @escaping () -> Void) {
         self.post = post
         self.openProfile = openProfile
         self.openComments = openComments
@@ -145,7 +145,7 @@ struct PostCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let user = post.user {
-                Button { openProfile(user.username) } label: {
+                Button { openProfile(user) } label: {
                     HStack(spacing: 10) {
                         Avatar(url: user.profilePicUrl, size: 34)
                         Text(user.username).font(.system(size: 14, weight: .semibold))
@@ -342,6 +342,7 @@ struct StoryViewer: View {
     @State private var progress: Double = 0
     @State private var dragY: CGFloat = 0
     @State private var activityFor: IGMedia?
+    @State private var loadError: String?
     @Environment(\.dismiss) private var dismiss
 
     private let tick = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
@@ -373,6 +374,16 @@ struct StoryViewer: View {
                 }
                 .id(item.id.value)
                 .ignoresSafeArea()
+            } else if let loadError = loadError {
+                // Antes saltaba a la siguiente al instante; ahora se queda y explica qué pasó.
+                VStack(spacing: 10) {
+                    Text("No se pudo cargar esta historia").font(.headline)
+                    Text(loadError).font(.footnote).multilineTextAlignment(.center).opacity(0.7)
+                    Text("Toca a la derecha para pasar a la siguiente.").font(.footnote).opacity(0.7)
+                }
+                .foregroundColor(.white)
+                .padding(32)
+                .frame(maxHeight: .infinity)
             } else {
                 ProgressView().tint(.white).frame(maxHeight: .infinity)
             }
@@ -435,10 +446,22 @@ struct StoryViewer: View {
             }
             HStack(spacing: 10) {
                 Avatar(url: reel.user.profilePicUrl, size: 34)
-                Text(isMine ? "Tu historia" : reel.user.username).font(.system(size: 15, weight: .semibold))
-                if let taken = item?.takenAt {
-                    Text(Date(timeIntervalSince1970: TimeInterval(taken)).shortAgo)
-                        .font(.system(size: 14)).opacity(0.7)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(isMine ? "Tu historia" : reel.user.username).font(.system(size: 15, weight: .semibold))
+                        if let taken = item?.takenAt {
+                            Text(Date(timeIntervalSince1970: TimeInterval(taken)).shortAgo)
+                                .font(.system(size: 14)).opacity(0.7)
+                        }
+                    }
+                    // Canción de la historia, deslizándose en bucle como en Instagram.
+                    if let song = item?.song {
+                        HStack(spacing: 4) {
+                            Image(systemName: "music.note").font(.system(size: 11))
+                            Marquee(text: song).font(.system(size: 13))
+                        }
+                        .frame(maxWidth: 200, alignment: .leading)
+                    }
                 }
                 Spacer()
                 CloseButton { dismiss() }.padding(-12)
@@ -480,11 +503,15 @@ struct StoryViewer: View {
 
     private func loadItems() async {
         progress = 0
+        loadError = nil
         let key = reel.id.value
         if items[key] == nil {
-            let loaded = (try? await InstagramAPI.shared.storyItems(reelID: key)) ?? reel.items ?? []
-            if loaded.isEmpty { next(); return }
-            items[key] = loaded
+            do {
+                items[key] = try await InstagramAPI.shared.storyItems(reelID: key)
+            } catch {
+                if let cached = reel.items, !cached.isEmpty { items[key] = cached }
+                else { loadError = error.localizedDescription; return }
+            }
         }
         // Precarga al siguiente usuario para que el salto sea instantáneo.
         if reelIndex + 1 < reels.count {
