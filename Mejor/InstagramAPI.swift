@@ -242,11 +242,21 @@ final class InstagramAPI {
         if let authorization = result.header("ig-set-authorization"), !authorization.isEmpty {
             auth.authorization = authorization.hasPrefix("Bearer") ? authorization : "Bearer \(authorization)"
         }
-        if result.status == "ok", let user = result.json["logged_in_user"] as? [String: Any] {
+        if let user = result.json["logged_in_user"] as? [String: Any] {
             auth.userID = idString(user["pk"])
             if let name = user["username"] as? String { auth.username = name }
             await record("login → ok como \(auth.username ?? "?")")
             return .done
+        }
+        // Tras 2FA o el código por correo, Instagram a veces solo entrega el permiso.
+        // Si ya tenemos el permiso, confirmamos quién eres con una llamada aparte.
+        if auth.authorization != nil, result.status == "ok" || result.json["action"] as? String == "close" {
+            if let me = try? await currentUser() {
+                auth.userID = idString(me["pk"])
+                if let name = me["username"] as? String { auth.username = name }
+                await record("login → ok (confirmado) como \(auth.username ?? "?")")
+                return .done
+            }
         }
         if result.json["two_factor_required"] as? Bool == true,
            let info = result.json["two_factor_info"] as? [String: Any],
@@ -259,6 +269,12 @@ final class InstagramAPI {
         }
         let message = result.message.isEmpty ? "No se pudo iniciar sesión. Revisa tu usuario y contraseña." : result.message
         throw APIError.message(message)
+    }
+
+    /// Confirma la sesión y devuelve tus datos de usuario (pk, username).
+    private func currentUser() async throws -> [String: Any]? {
+        let result = try await raw("accounts/current_user/", query: ["edit": "false"])
+        return result.json["user"] as? [String: Any]
     }
 
     /// Pide la clave pública con la que se cifra la contraseña (viene en las cabeceras).
