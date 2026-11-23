@@ -29,6 +29,10 @@ struct WelcomeView: View {
     enum Step { case credentials, twoFactor, email }
     enum Field { case username, password, code }
 
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
     var body: some View {
         ZStack {
             Brand.background.ignoresSafeArea()
@@ -39,6 +43,9 @@ struct WelcomeView: View {
                     Text("Instagram sin el feed infinito")
                         .font(.system(size: 16, weight: .medium, design: .rounded))
                         .foregroundColor(.white.opacity(0.7))
+                    Text("Login propio · versión \(appVersion)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Brand.accent)
 
                     switch step {
                     case .credentials: credentials

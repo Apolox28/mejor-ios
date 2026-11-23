@@ -439,7 +439,8 @@ final class InstagramAPI {
     }
 
     func runDiagnostics() async {
-        await record("— Diagnóstico · sesión \(auth.isLoggedIn ? "activa como \(auth.username ?? "?")" : "cerrada") —")
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        await record("— Mejor \(version) · login propio · sesión \(auth.isLoggedIn ? "activa como \(auth.username ?? "?")" : "cerrada") —")
         _ = try? await storiesTray()
         _ = try? await timeline(maxID: nil)
         _ = try? await search("a")
