@@ -1,5 +1,14 @@
 import SwiftUI
 
+struct SplashView: View {
+    var body: some View {
+        ZStack {
+            Brand.background.ignoresSafeArea()
+            LogoImage(size: 110)
+        }
+    }
+}
+
 struct LogoImage: View {
     let size: CGFloat
     var body: some View {
@@ -12,172 +21,141 @@ struct LogoImage: View {
     }
 }
 
-/// Pantalla de inicio de sesión nativa: usuario y contraseña van directo a Instagram.
 struct WelcomeView: View {
     @EnvironmentObject private var session: Session
-    @State private var username = ""
-    @State private var password = ""
-    @State private var busy = false
-    @State private var error: String?
-    @State private var step: Step = .credentials
-    @State private var code = ""
-    @State private var twoFactorID = ""
-    @State private var challengePath = ""
-    @State private var hint = ""
-    @FocusState private var focus: Field?
-
-    enum Step { case credentials, twoFactor, email }
-    enum Field { case username, password, code }
-
-    private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-    }
+    @State private var showLogin = false
 
     var body: some View {
         ZStack {
             Brand.background.ignoresSafeArea()
-            ScrollView {
-                VStack(spacing: 18) {
-                    LogoImage(size: 96).padding(.top, 36)
-                    Text("Mejor").font(.system(size: 40, weight: .heavy, design: .rounded)).foregroundColor(.white)
-                    Text("Instagram sin el feed infinito")
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
-                        .foregroundColor(.white.opacity(0.7))
-                    Text("Login propio · versión \(appVersion)")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(Brand.accent)
 
-                    switch step {
-                    case .credentials: credentials
-                    case .twoFactor, .email: codeForm
-                    }
+            VStack(spacing: 0) {
+                Spacer(minLength: 24)
 
-                    if let error = error {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundColor(Color(red: 1, green: 0.5, blue: 0.5))
-                            .multilineTextAlignment(.center)
-                    }
+                LogoImage(size: 112)
 
-                    Text("Tu usuario y contraseña van directo a Instagram. Mejor los cifra y no los guarda; solo guarda el permiso que Instagram entrega.")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.5))
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 8)
+                Text("Mejor")
+                    .font(.system(size: 42, weight: .heavy, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.top, 22)
+
+                Text("Instagram sin el feed infinito")
+                    .font(.system(size: 17, weight: .medium, design: .rounded))
+                    .foregroundColor(.white.opacity(0.7))
+                    .padding(.top, 6)
+
+                VStack(alignment: .leading, spacing: 18) {
+                    FeatureRow(icon: "paperplane.fill", title: "Mensajes",
+                               detail: "Tus chats y los reels que te mandan")
+                    FeatureRow(icon: "circle.dashed", title: "Historias",
+                               detail: "Solo las historias, sin publicaciones")
+                    FeatureRow(icon: "magnifyingglass", title: "Buscar",
+                               detail: "Encuentra cuentas sin la cuadrícula de Explorar")
                 }
-                .padding(.horizontal, 28)
-                .padding(.bottom, 32)
+                .padding(.top, 40)
+
+                Spacer(minLength: 24)
+
+                Button {
+                    showLogin = true
+                } label: {
+                    Text("Iniciar sesión con Instagram")
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundColor(Brand.night)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 17)
+                        .background(Brand.ring)
+                        .clipShape(Capsule())
+                }
+
+                Text("Entras en la página oficial de Instagram. Mejor no ve ni guarda tu contraseña.")
+                    .font(.footnote)
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(.top, 14)
             }
+            .padding(.horizontal, 28)
+            .padding(.bottom, 20)
         }
         .preferredColorScheme(.dark)
-    }
-
-    private var credentials: some View {
-        VStack(spacing: 12) {
-            field("Usuario", text: $username, field: .username)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.asciiCapable)
-            secureField("Contraseña", text: $password)
-            primaryButton("Iniciar sesión") { Task { await logIn() } }
-                .disabled(username.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
+        .sheet(isPresented: $showLogin) {
+            LoginSheet()
+                .environmentObject(session)
         }
-        .padding(.top, 10)
     }
+}
 
-    private var codeForm: some View {
-        VStack(spacing: 12) {
-            Text(hint).font(.system(size: 15)).foregroundColor(.white.opacity(0.8)).multilineTextAlignment(.center)
-            field("Código", text: $code, field: .code)
-                .keyboardType(.numberPad)
-            primaryButton("Verificar") { Task { await submitCode() } }
-                .disabled(code.trimmingCharacters(in: .whitespaces).count < 4)
-            Button("Volver") { reset() }.font(.footnote).foregroundColor(.white.opacity(0.6))
-        }
-        .padding(.top, 10)
-        .onAppear { focus = .code }
-    }
+private struct FeatureRow: View {
+    let icon: String
+    let title: String
+    let detail: String
 
-    private func field(_ title: String, text: Binding<String>, field: Field) -> some View {
-        TextField("", text: text, prompt: Text(title).foregroundColor(.white.opacity(0.4)))
-            .focused($focus, equals: field)
-            .foregroundColor(.white)
-            .padding(.horizontal, 16).padding(.vertical, 14)
-            .background(Color.white.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private func secureField(_ title: String, text: Binding<String>) -> some View {
-        SecureField("", text: text, prompt: Text(title).foregroundColor(.white.opacity(0.4)))
-            .focused($focus, equals: .password)
-            .foregroundColor(.white)
-            .padding(.horizontal, 16).padding(.vertical, 14)
-            .background(Color.white.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private func primaryButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            ZStack {
-                if busy { ProgressView().tint(Brand.night) }
-                else { Text(title).font(.system(size: 17, weight: .bold, design: .rounded)).foregroundColor(Brand.night) }
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 44, height: 44)
+                .background(Color.white.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                Text(detail)
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.6))
             }
-            .frame(maxWidth: .infinity).padding(.vertical, 16)
-            .background(Brand.ring).clipShape(Capsule())
-        }
-        .disabled(busy)
-    }
-
-    // MARK: Acciones
-
-    private func logIn() async {
-        busy = true; error = nil; focus = nil
-        defer { busy = false }
-        do {
-            try await handle(InstagramAPI.shared.logIn(
-                username: username.trimmingCharacters(in: .whitespaces), password: password))
-        } catch {
-            self.error = error.localizedDescription
+            Spacer(minLength: 0)
         }
     }
+}
 
-    private func submitCode() async {
-        busy = true; error = nil; focus = nil
-        defer { busy = false }
-        do {
-            let result: LoginStep
-            switch step {
-            case .twoFactor:
-                result = try await InstagramAPI.shared.submitTwoFactor(
-                    code: code, identifier: twoFactorID,
-                    username: username.trimmingCharacters(in: .whitespaces))
-            case .email:
-                result = try await InstagramAPI.shared.submitEmailCode(code, challengePath: challengePath)
-            case .credentials:
-                return
+struct LoginSheet: View {
+    @EnvironmentObject private var session: Session
+    @Environment(\.dismiss) private var dismiss
+    @State private var reloadToken = 0
+
+    private let loginURL = URL(string: "https://www.instagram.com/accounts/login/")!
+
+    var body: some View {
+        NavigationView {
+            WebScreen(startURL: loginURL, section: nil, resetToken: reloadToken) { url in
+                // Si la web ya salió del login, la sesión está iniciada.
+                let path = url.path.lowercased()
+                if path.hasPrefix("/accounts/onetap") {
+                    // Esta pantalla ("¿Guardar tu información?") solo sale tras entrar bien.
+                    session.markLoggedIn()
+                } else if !path.hasPrefix("/accounts/login") {
+                    session.refresh()
+                }
             }
-            try await handle(result)
-        } catch {
-            self.error = error.localizedDescription
+            .navigationTitle("Iniciar sesión")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancelar") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button {
+                            reloadToken += 1
+                        } label: {
+                            Label("Recargar", systemImage: "arrow.clockwise")
+                        }
+                        Button(role: .destructive) {
+                            session.signOut()
+                            reloadToken += 1
+                        } label: {
+                            Label("Borrar datos y reintentar", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
         }
-    }
-
-    private func handle(_ result: LoginStep) async throws {
-        switch result {
-        case .done:
-            password = ""
-            session.refresh()
-        case .twoFactor(let identifier, let hintText):
-            twoFactorID = identifier; hint = hintText; code = ""; step = .twoFactor
-        case .checkpoint(let path, _):
-            challengePath = path
-            try await InstagramAPI.shared.requestEmailCode(challengePath: path)
-            hint = "Instagram te envió un código por correo. Escríbelo aquí."
-            code = ""; step = .email
-        }
-    }
-
-    private func reset() {
-        step = .credentials; code = ""; error = nil; focus = nil
+        .navigationViewStyle(.stack)
+        .accentColor(Brand.accent)
     }
 }
